@@ -1,0 +1,420 @@
+---
+title: "Medartis Wrist Plates"
+subtitle: "Experiment 2 - bending and shear matched"
+date: 2024-07-23
+format: 
+  html: default
+  pdf: default
+  docx: default
+---
+
+## setup
+
+Load any needed libraries and define some constants.
+
+```{r}
+#| label: setup
+#| warning: false
+
+library(dplyr) # for manipulating dataframes
+library(ggplot2) # for plotting
+
+# If you don't have bluer install it with 
+# inatall.packages("devtools")
+# devtools::install_github(repo = "yadbor/bluer")
+library(bluer) # routines for analysing mechanical test data
+
+
+data_root <- here::here("data-raw", "Experiment 2", "Results", "VIC-3D data")
+
+data_col_names <- "File Number,U [mm],V [mm],W [mm],Time_1,position,load"
+data_cols <- stringr::str_split_1(data_col_names, ",")
+
+```
+
+## read the data files
+
+Get all the `.csv` file names under the `data_root` folder 
+and store them in a `list`.
+
+Then run the list of file paths names through a pipeline 
+that does the following:
+
+1.  Name every list element with the `basename` from the path \
+(i.e. just the file name with no path or extension)
+1.  Read each .csv file into the list as a dataframe
+1.  Keep only the wanted columns in each dataframe
+1.  Stack the read dataframes, adding the names from the list as a column
+
+```{r}
+#| label: load_data_files
+#| warning: false
+
+# Find all .csv files under the data_root
+file_path <- list.files(path = data_root, pattern = "*.csv", 
+                         full.names = TRUE, recursive = TRUE)
+
+all_results <- file_path |>        
+  setNames(basename(file_path)) |> # name each item in the list with its basename
+  purrr::map( \(df) readr::read_csv(df, show_col_types = FALSE) |> 
+                    select(data_cols)
+              ) |>
+  bind_rows(.id = "filename")      # bind together, adding a column for the name
+
+```
+
+`all_results` is now a big dataframe 
+(actually a [tibble](https://tibble.tidyverse.org/)) 
+holding all the results from all tests, labelled with their file name.
+This will work for studies like this one where all the meta-data are in the file names. 
+For some studies some of the meta-data can be in the folder name as well. 
+In those cases the final folder name can be extracted using `basename(pathname(full_path))`.
+
+# extract test information
+
+The filenames have the plate type, id and repeat encoded as:
+
+"{Long|Short} Plate {id} T{repeat}_Data.csv"
+
+Extract these into separate columns to identify each test.
+Because the filenames don't have clean delimiters use a regex to break them up.
+
+Some names have special issues, like the two that were repeated (T1.2 & T2.2).
+Clean those up here as well.
+
+```{r}
+#| label: parse_filenames
+
+all_results <- all_results |>
+  tidyr::separate_wider_regex(cols = filename,
+                              patterns = c(plate = "^\\w+", "\\D*", 
+                                           id = "\\d+", "\\s*T", 
+                                           rep = "[\\d\\.]+", ".*"),
+                              cols_remove = FALSE
+                              ) |>
+  # Deal with special cases. 
+  # In this study, T1.2 and T2.2 replace T1 and T2
+  mutate(rep = stringr::str_remove(rep, "\\..*")) # delete everything after "."
+
+```
+
+Replace the column names with names that are easier to manipulate in code but 
+still convey their purpose
+
+```{r}
+#| label: rename_columns
+
+all_results <- all_results |>
+  rename(frame = `File Number`, 
+         u = `U [mm]`, v = `V [mm]`, w = `W [mm]`,
+         time = `Time_1`)
+```
+
+## save clean data
+
+Write the cleaned data to a `.csv` file before starting the analysis.
+
+```{r}
+#| label: save_data
+
+all_results |> 
+  readr::write_csv(file = here::here("data", "all_results.csv"))
+```
+
+## analyse cycles
+
+Each test has multiple load-unload cycles. 
+Data are recorded on the 9^th^ and 10^th^ cycles, and this is repeated 
+every 10 cycles up to a total of 60 cyles.
+We are interested in the loading part of each cycle.
+
+Divide test into cycles by finding peaks and troughs.
+The loading phase is the one going towards a peak, and the unloading phase is
+towards a trough.
+
+The `bluer` package has routines for finding peaks and labelling cycles 
+and phases.
+
+But first, as these tests are all in compression, the load and position are all 
+negative.
+Invert them both so that graphs read better for most people.
+
+```{r}
+#| label: label_cycles
+
+cycles <- all_results |> 
+  mutate(position = -1.0 * position, load = -1.0 * load) |> # Invert these axes
+  group_by(plate, id, rep) |> # group each test
+  mutate(as_tibble(bluer::label_cycles(position))) |> # and label the cycles
+  mutate(cycle = factor(cycle)) |> # Make the cycle a factor for easier plotting
+  mutate(uid = paste0(plate,id,rep,cycle)) # uniquely identify each cycle
+
+# Check what we have done
+cycles |> ggplot() + 
+  aes(x = time, y = position, colour = seg, group = rep) +
+  geom_point(aes(shape = rep)) +
+  facet_grid(rows = vars(plate), cols = vars(id)) |>
+  labs(title = "everything, everywhere, all at once")
+
+# that plot was crowded, so do separate ones for each plate
+#
+
+cycles |> 
+    filter(plate == "Long") |>
+    ggplot() + 
+    aes(x = time, y = position, colour = seg, group = rep) +
+    geom_point() +
+    facet_grid(rows = vars(id), cols = vars(rep)) +
+    labs(title = "Long")
+
+cycles |> 
+    filter(plate == "Short") |>
+    ggplot() + 
+    aes(x = time, y = position, colour = seg, group = rep) +
+    geom_point() +
+    facet_grid(rows = vars(id), cols = vars(rep)) +
+    labs(title = "Short")
+
+```
+
+Plot just the loading portion of each cycle, as load vs position.
+```{r}
+#| label: plot_load_position
+
+loading <- cycles |> 
+    filter(seg == "load")
+
+loading |>
+    filter(plate == "Short") |>
+    ggplot() + 
+    aes(x = position, y = load, colour = cycle, group = uid) +
+    geom_line() +
+    facet_grid(rows = vars(id), cols = vars(rep)) +
+    labs(title = "load vs position - Short")
+
+loading |>
+    filter(plate == "Long") |>
+    ggplot() + 
+    aes(x = position, y = load, colour = cycle, group = uid) +
+    geom_line() +
+    facet_grid(rows = vars(id), cols = vars(rep)) +
+    labs(title = "load vs position - Long")
+```
+
+## analysis
+
+To get the stiffness of each test we fit a linear model by least squares.
+```{r}
+#| label: fit_lines
+
+loading_models <- loading |>
+  #group_by(uid) |>
+  group_by(plate, id, rep, cycle) |>
+  summarise(
+    model = list(
+      lm(load ~ position, data = pick(everything()))
+    )
+  )
+
+loading_models |>   
+  mutate(glance = purrr::map(model, broom::glance))|> 
+  tidyr::unnest(glance)
+
+# Extract the slope components of the models
+lm_fits <- loading_models |> 
+  mutate(tidy = purrr::map(model, broom::tidy)) |> 
+  tidyr::unnest(tidy) |> 
+  filter(term != '(Intercept)')
+
+lm_fits
+
+lm_fits |> ggplot() +
+  aes(x= cycle, y = estimate, colour = plate) +
+  geom_point() +
+  facet_grid(rows = vars(id), cols = vars(rep))
+
+lm_fits |> filter(rep == 1) |> ggplot() +
+  aes(x= cycle, y = estimate, colour = plate) +
+  geom_point() +
+  facet_grid(cols = vars(id), rows = vars(plate))
+```
+
+## check for effect of cycling
+
+We have six plates.
+Plate 1 was tested multiple times, to measure the effect of repeat testing.
+Plates 2 -- 6 were each tested once.
+Every test was made up of 60 cycles, with two cycles recorded every 10 - so
+cycles 9, 10, 19, 20, 29, 30, 39, 40, 49, 50, 50, 60.
+
+To test if the number of cycles is having an effect use a repeated 
+measures ANOVA, as the cycles are repeated on the same subject for each test.
+
+```{r}
+#| label: repeated_measures_anova
+
+plate_1 <- lm_fits |>
+  ungroup() |>
+  filter(id == 1)
+  # summarise(
+  #   anova = list(aov(estimate ~ rep * cycle)))
+  # )
+
+# plate_1 |>
+#   mutate(model = list(aov(formula = estimate ~ cycle + Error(rep/cycle), data = data)))
+
+plate_1 |> 
+  nest_by(plate) |>  
+  mutate(model = list(aov(estimate ~ cycle + Error(rep/cycle), data = data))) |> 
+  mutate(sum = list(broom::tidy(model))) |> 
+  tidyr::unnest(sum)
+
+# Check for any trend in the stiffness measured over time by fitting a line to
+# stiffness vs cycle and checking if the the slope of that line is 
+# significantly different to zero
+# Note that there are a lot of comparisons, so use a correction for this.
+# Also note that p.adjust doesn't work if the dataframe is grouped (returns p)
+plate_1 |> 
+  mutate(cycle = as.numeric(cycle)) |> 
+  nest_by(plate, rep) |> 
+  summarise(model = list(lm(formula = estimate ~ cycle, data = data))) |> 
+  mutate(tidy = purrr::map(model, broom::tidy)) |> 
+  tidyr::unnest(tidy) |> 
+  filter(term == "cycle") |>
+  ungroup() |>
+  mutate(p.adj = p.adjust(p.value, "holm"))
+
+```
+None of the slopes are significant, so can conclude that the stiffness is not 
+changed by multiple cycles.
+This means they can be averaged to reduce the variation between cycles.
+
+Use the averaged slopes in an ANOVA to look for differences due to plate type.
+```{r}
+
+model <- lm_fits |>
+  summarise(stiffness = mean(estimate)) |>
+  ungroup() |>
+  filter(rep == 1) |>
+  aov(stiffness ~ plate, data = _)
+
+summary(model)
+```
+
+There are anomalies in the motion data.
+The first cycles begins at u == 0, by definition (load about 20 N), 
+but subsequent cycles begin at variable positions depending on exactly where 
+the cycle start was found.
+Likewise, some tests show an anomaly at the peak motion, probably due again to
+not quite catching the turning points.
+
+Fix these by starting at the first point where u >= 0. 
+At the top can just trim the last two data points to avoid the issue, 
+but it doesn't have much effect on the slope calculation so leave it for now.
+
+```{r}
+loading <- loading |> 
+  group_by(plate, id, rep, cycle) |> 
+  filter(u > 0) 
+
+loading |>
+  summarise(load=min(load), pos=min(position)) |> print(n=Inf)
+```
+
+
+## fusion site motion
+```{r}
+# plot U & V vs load
+# Rearrange to long form for easier plotting in ggplot
+loading_long <- loading |> 
+    tidyr::pivot_longer(cols = c(u, v), names_to = "axis", values_to = "motion")
+# Make a plot for each plate tpye
+for (p in c("Long", "Short")) {
+    plot_p <- loading_long |>
+        filter(plate == p) |>
+        ggplot() + 
+        aes(y = motion, x = load, colour = cycle, group = uid) +
+        geom_line() +
+        facet_grid(rows = vars(axis), cols = vars(rep)) +
+        labs(title = paste0("load vs position - ", p))
+    print(plot_p)
+}
+```
+
+
+## plot combined motion
+
+```{r}
+
+for (p in c("Long", "Short")) {
+  plot_p <- loading |> 
+    mutate(motion = sqrt(u^2 + v^2 + w^2)) |>
+    filter(plate == p) |>
+    ggplot() + 
+    aes(y = motion, x = load, colour = cycle, group = uid) +
+    geom_line() +
+    ylim(c(0,0.6)) +
+    facet_grid(rows = vars(id), cols = vars(rep)) +
+    labs(title = paste0("load vs position - ", p))
+  
+  print(plot_p)
+}
+
+```
+
+## compare combined motion
+
+```{r}
+# Plate 1 was used to test the effect of multiple repeats, 
+# but for the inter-plate comparison only use the first rep to match the others.
+plates_rep <- loading |> 
+    mutate(motion = sqrt(u^2 + v^2 + w^2)) |>
+    filter(rep == 1)
+
+# Repeat the stiffness analysis above, but for the combined fusion site motion.
+motion_models <- loading |> 
+  mutate(motion = sqrt(u^2 + v^2 + w^2)) |>
+  group_by(plate, id, rep, cycle) |>
+  summarise(
+    model = list(
+      lm(load ~ motion, data = pick(everything()))
+    )
+  ) |> 
+  mutate(tidy = purrr::map(model, broom::tidy)) |> 
+  tidyr::unnest(tidy) |> 
+  filter(term != '(Intercept)')
+
+# Check for an effect of cycling with a repeated measures ANOVA
+motion_models |>
+  filter(id == 1)|> # The first plate id has multiple reps
+  ungroup() |>
+  nest_by(plate) |>  
+  mutate(model = list(aov(estimate ~ cycle + Error(rep/cycle), data = data))) |> 
+  mutate(sum = list(broom::tidy(model))) |> 
+  tidyr::unnest(sum)
+
+motion_models |>
+  filter(rep == 1)|> # The first rep has multiple plate id
+  ungroup() |>
+  nest_by(plate) |>  
+  mutate(model = list(aov(estimate ~ cycle + Error(id/cycle), data = data))) |> 
+  mutate(sum = list(broom::tidy(model))) |> 
+  tidyr::unnest(sum)
+
+
+```
+
+
+
+## notes
+
+
+
+```{r}
+#| label: scratchpad
+
+# Make a vector of the actual cycle numbers we recorded:
+#   9, 10, 19, 20, 29, 30 , 39, 40, 49, 50 , 59, 60
+actual_cycles <- 10 * rep(1:6, each = 2) - rep(1:0, 6)
+```
+

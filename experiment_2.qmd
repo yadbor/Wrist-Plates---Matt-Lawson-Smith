@@ -65,7 +65,7 @@ all_results <- file_path |>
 
 `all_results` is now a big dataframe 
 (actually a [tibble](https://tibble.tidyverse.org/)) 
-holding all the results from all tests, labelled with their file name.
+holding all of the results from all of the tests, labelled with their file name.
 This will work for studies like this one where all the meta-data are in the file names. 
 For some studies some of the meta-data can be in the folder name as well. 
 In those cases the final folder name can be extracted using `basename(pathname(full_path))`.
@@ -128,15 +128,16 @@ Data are recorded on the 9^th^ and 10^th^ cycles, and this is repeated
 every 10 cycles up to a total of 60 cyles.
 We are interested in the loading part of each cycle.
 
-Divide test into cycles by finding peaks and troughs.
+Divide test into cycles by finding peaks and troughs, which are defined as local
+maxima and minima.
 The loading phase is the one going towards a peak, and the unloading phase is
 towards a trough.
 
 The `bluer` package has routines for finding peaks and labelling cycles 
 and phases.
 
-But first, as these tests are all in compression, the load and position are all 
-negative.
+But first, as these tests are all in compression, both the load and position 
+are negative.
 Invert them both so that graphs read better for most people.
 
 ```{r}
@@ -156,24 +157,23 @@ cycles |> ggplot() +
   facet_grid(rows = vars(plate), cols = vars(id)) |>
   labs(title = "everything, everywhere, all at once")
 
-# that plot was crowded, so do separate ones for each plate
-#
-
+# that plot was crowded, so do separate ones for each sub-study
+# First, the repeats of plate 1 (within plate)
 cycles |> 
-    filter(plate == "Long") |>
+    filter(id == 1) |>
     ggplot() + 
     aes(x = time, y = position, colour = seg, group = rep) +
     geom_point() +
-    facet_grid(rows = vars(id), cols = vars(rep)) +
-    labs(title = "Long")
-
+    facet_grid(rows = vars(plate), cols = vars(rep)) +
+    labs(title = "Repeat tests on plate 1")
+# Then the first repeat for each plate (between plates)
 cycles |> 
-    filter(plate == "Short") |>
+    filter(rep == 1) |>
     ggplot() + 
     aes(x = time, y = position, colour = seg, group = rep) +
     geom_point() +
-    facet_grid(rows = vars(id), cols = vars(rep)) +
-    labs(title = "Short")
+    facet_grid(rows = vars(plate), cols = vars(id)) +
+    labs(title = "Test 1 for each plate")
 
 ```
 
@@ -184,59 +184,104 @@ Plot just the loading portion of each cycle, as load vs position.
 loading <- cycles |> 
     filter(seg == "load")
 
+# First, the repeats of plate 1 (within plate)
 loading |>
-    filter(plate == "Short") |>
+    filter(id == 1) |>
     ggplot() + 
     aes(x = position, y = load, colour = cycle, group = uid) +
     geom_line() +
-    facet_grid(rows = vars(id), cols = vars(rep)) +
-    labs(title = "load vs position - Short")
+    facet_grid(rows = vars(plate), cols = vars(rep)) +
+    labs(title = "load vs position - plate 1 all repeats")
 
+# Then the first repeat for each plate (between plates)
 loading |>
-    filter(plate == "Long") |>
+    filter(rep == 1) |>
     ggplot() + 
     aes(x = position, y = load, colour = cycle, group = uid) +
     geom_line() +
-    facet_grid(rows = vars(id), cols = vars(rep)) +
-    labs(title = "load vs position - Long")
+    facet_grid(rows = vars(id), cols = vars(plate)) +
+    labs(title = "load vs position - repeat 1 of each plate")
+
 ```
+
+## clean the motion data
+
+There are anomalies in the motion data.
+The first cycles begins at `v == 0`, by definition (load about 20 N), 
+but subsequent cycles begin at variable positions depending on exactly where 
+the cycle start was found.
+Likewise, some tests show an anomaly at the peak motion, probably due again to
+not quite catching the turning points.
+
+Fix these by starting at the first point where `v >= 0`. 
+At the top can just trim the last two data points to avoid the issue, 
+but it doesn't have much effect on the slope calculation so leave it for now.
+
+Then calculate the total motion at teh fusion site from the vector sum of the 
+three individual motions `(u, v, w)`
+
+```{r}
+loading <- loading |> 
+  group_by(plate, id, rep, cycle) |> 
+  filter(v > 0) |>
+  mutate(motion = sqrt(u^2 + v^2 + w^2)) 
+```
+
 
 ## analysis
 
 To get the stiffness of each test we fit a linear model by least squares.
+
+We can analyse total motion at the end of the "metacarpal" (`position`), 
+or the total motion at the fusion site (`motion`).
+The latter is what is more clinically relevant, and by measuring at
+the fusion site we remove the effect of differeing bending in the 3D printed
+bone analogoues.
+
+**Note that repeat 3 shows higher variation.**
+**This was also evident in the Instron raw data,** 
+**and may be due to some electrical interference.**
+
 ```{r}
 #| label: fit_lines
 
 loading_models <- loading |>
-  #group_by(uid) |>
   group_by(plate, id, rep, cycle) |>
   summarise(
-    model = list(
+    position_model = list(
       lm(load ~ position, data = pick(everything()))
+    ),
+    motion_model = list(
+      lm(load ~ motion, data = pick(everything()))
     )
   )
 
-loading_models |>   
-  mutate(glance = purrr::map(model, broom::glance))|> 
-  tidyr::unnest(glance)
+# Extract the slope components (estimate) of the models
+stiffness <- loading_models |>
+  mutate(across(ends_with("model"), ~ purrr::map(.x, broom::tidy), 
+                .names = "{.col}_tidy")) |> 
+  tidyr::unnest(ends_with("tidy"), names_sep = "_") |>
+  filter(position_model_tidy_term != "(Intercept)") |> 
+  select(cycle, ends_with("estimate")) |>
+  rename_with(~ stringr::str_remove(.x, "_model_tidy_estimate"))
 
-# Extract the slope components of the models
-lm_fits <- loading_models |> 
-  mutate(tidy = purrr::map(model, broom::tidy)) |> 
-  tidyr::unnest(tidy) |> 
-  filter(term != '(Intercept)')
-
-lm_fits
-
-lm_fits |> ggplot() +
-  aes(x= cycle, y = estimate, colour = plate) +
+# Plot the stiffnesses per cycle as a check
+stiffness |> 
+  filter(id == 1) |>
+  ggplot() +
+  aes(x= cycle, y = motion, colour = plate) +
   geom_point() +
-  facet_grid(rows = vars(id), cols = vars(rep))
+  facet_grid(rows = vars(plate), cols = vars(rep)) +
+  labs(title = "stiffness - plate 1 all repeats")
 
-lm_fits |> filter(rep == 1) |> ggplot() +
-  aes(x= cycle, y = estimate, colour = plate) +
+stiffness |> 
+  filter(rep == 1) |> 
+  ggplot() +
+  aes(x= cycle, y = motion, colour = plate) +
   geom_point() +
-  facet_grid(cols = vars(id), rows = vars(plate))
+  facet_grid(cols = vars(id), rows = vars(plate)) +
+  labs(title = "stiffness - repeat 1 of each plate")
+
 ```
 
 ## check for effect of cycling
@@ -253,19 +298,13 @@ measures ANOVA, as the cycles are repeated on the same subject for each test.
 ```{r}
 #| label: repeated_measures_anova
 
-plate_1 <- lm_fits |>
+plate_1 <- stiffness |>
   ungroup() |>
   filter(id == 1)
-  # summarise(
-  #   anova = list(aov(estimate ~ rep * cycle)))
-  # )
-
-# plate_1 |>
-#   mutate(model = list(aov(formula = estimate ~ cycle + Error(rep/cycle), data = data)))
 
 plate_1 |> 
   nest_by(plate) |>  
-  mutate(model = list(aov(estimate ~ cycle + Error(rep/cycle), data = data))) |> 
+  mutate(model = list(aov(motion ~ cycle + Error(rep/cycle), data = data))) |> 
   mutate(sum = list(broom::tidy(model))) |> 
   tidyr::unnest(sum)
 
@@ -277,7 +316,7 @@ plate_1 |>
 plate_1 |> 
   mutate(cycle = as.numeric(cycle)) |> 
   nest_by(plate, rep) |> 
-  summarise(model = list(lm(formula = estimate ~ cycle, data = data))) |> 
+  summarise(model = list(lm(formula = motion ~ cycle, data = data))) |> 
   mutate(tidy = purrr::map(model, broom::tidy)) |> 
   tidyr::unnest(tidy) |> 
   filter(term == "cycle") |>
@@ -292,8 +331,8 @@ This means they can be averaged to reduce the variation between cycles.
 Use the averaged slopes in an ANOVA to look for differences due to plate type.
 ```{r}
 
-model <- lm_fits |>
-  summarise(stiffness = mean(estimate)) |>
+model <- stiffness |>
+  summarise(stiffness = mean(motion)) |>
   ungroup() |>
   filter(rep == 1) |>
   aov(stiffness ~ plate, data = _)
@@ -323,6 +362,51 @@ loading |>
 
 
 ## fusion site motion
+
+```{r}
+# Make a plot for each plate
+
+plot_p <- loading |>
+    filter(rep == 1) |>
+    ggplot() + 
+    aes(y = motion, x = load, colour = cycle, group = uid) +
+    geom_line() +
+    facet_grid(rows = vars(plate), cols = vars(id)) +
+    labs(title = "load vs motion")
+print(plot_p)
+ggsave(filename = here::here("data", "motion_vs_cycle.png"), plot = plot_p)
+```
+```{r}
+# Make a plot for each repeat
+
+plot_p <- loading |>
+    filter(id == 1) |>
+    ggplot() + 
+    aes(y = motion, x = load, colour = cycle, group = uid) +
+    geom_line() +
+    facet_grid(rows = vars(plate), cols = vars(rep)) +
+    labs(title = "load vs motion")
+print(plot_p)
+ggsave(filename = here::here("data", "motion_vs_rep.png"), plot = plot_p)
+```
+
+```{r}
+# COmpare average stiffness between plates
+
+plot_box <- loading |>
+    filter(rep == 1) |>
+    mutate(stiffness = mean(motion)) |>
+    ggplot() + 
+    aes(y = motion, x = plate) +
+    geom_boxplot() +
+    theme_bw(base_size = 12)
+    #labs(title = "plate stiffness")
+print(plot_box)
+
+ggsave(filename = here::here("data", "stiffness_between_plates.png"), plot = plot_box, width = 7, height = 5)
+```
+
+
 ```{r}
 # plot U & V vs load
 # Rearrange to long form for easier plotting in ggplot

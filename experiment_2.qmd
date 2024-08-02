@@ -15,12 +15,13 @@ Load any needed libraries and define some constants.
 ```{r}
 #| label: setup
 #| warning: false
+#| message: false
 
 library(dplyr) # for manipulating dataframes
 library(ggplot2) # for plotting
 
 # If you don't have bluer install it with 
-# inatall.packages("devtools")
+# install.packages("devtools")
 # devtools::install_github(repo = "yadbor/bluer")
 library(bluer) # routines for analysing mechanical test data
 
@@ -66,9 +67,20 @@ all_results <- file_path |>
 `all_results` is now a big dataframe 
 (actually a [tibble](https://tibble.tidyverse.org/)) 
 holding all of the results from all of the tests, labelled with their file name.
-This will work for studies like this one where all the meta-data are in the file names. 
-For some studies some of the meta-data can be in the folder name as well. 
-In those cases the final folder name can be extracted using `basename(pathname(full_path))`.
+
+This approach works well for studies like this one,
+where all the meta-data are in the file names. 
+
+Some studies have some or all of the meta-data in the folder name.
+This is the case for Instron raw data files, where the files are just numbered
+and stored in a folder named for the test.
+
+In those cases the final folder name of a path can be extracted using
+`basename(dirname(full_path))`
+
+Studies with the metadata in several parts of the path can either be split by
+repeatedly taking off the final component, or the path can be analysed with
+the usual string manipulation tools (see `stringr`)
 
 # extract test information
 
@@ -77,9 +89,11 @@ The filenames have the plate type, id and repeat encoded as:
 "{Long|Short} Plate {id} T{repeat}_Data.csv"
 
 Extract these into separate columns to identify each test.
-Because the filenames don't have clean delimiters use a regex to break them up.
+Because the filenames don't have clean delimiters use a [regex](https://search.r-project.org/R/refmans/base/html/regex.html) 
+to break them up.
 
-Some names have special issues, like the two that were repeated (T1.2 & T2.2).
+Some file names have special issues, like the two tests that were repeated 
+(T1.2 & T2.2).
 Clean those up here as well.
 
 ```{r}
@@ -93,7 +107,7 @@ all_results <- all_results |>
                               cols_remove = FALSE
                               ) |>
   # Deal with special cases. 
-  # In this study, T1.2 and T2.2 replace T1 and T2
+  # In this study, T1.2 and T2.2 replaced T1 and T2
   mutate(rep = stringr::str_remove(rep, "\\..*")) # delete everything after "."
 
 ```
@@ -125,7 +139,7 @@ all_results |>
 
 Each test has multiple load-unload cycles. 
 Data are recorded on the 9^th^ and 10^th^ cycles, and this is repeated 
-every 10 cycles up to a total of 60 cyles.
+every 10 cycles up to a total of 60 cycles.
 We are interested in the loading part of each cycle.
 
 Divide test into cycles by finding peaks and troughs, which are defined as local
@@ -207,159 +221,25 @@ loading |>
 ## clean the motion data
 
 There are anomalies in the motion data.
-The first cycles begins at `v == 0`, by definition (load about 20 N), 
+The first cycles begins at `u == 0`, by definition (load about 20 N), 
 but subsequent cycles begin at variable positions depending on exactly where 
 the cycle start was found.
 Likewise, some tests show an anomaly at the peak motion, probably due again to
 not quite catching the turning points.
 
-Fix these by starting at the first point where `v >= 0`. 
+Fix these by starting at the first point where `u >= 0`. 
 At the top can just trim the last two data points to avoid the issue, 
 but it doesn't have much effect on the slope calculation so leave it for now.
 
-Then calculate the total motion at teh fusion site from the vector sum of the 
+Then calculate the total motion at the fusion site from the vector sum of the 
 three individual motions `(u, v, w)`
 
 ```{r}
 loading <- loading |> 
   group_by(plate, id, rep, cycle) |> 
-  filter(v > 0) |>
+  filter(u >= 0) |>
   mutate(motion = sqrt(u^2 + v^2 + w^2)) 
 ```
-
-
-## analysis
-
-To get the stiffness of each test we fit a linear model by least squares.
-
-We can analyse total motion at the end of the "metacarpal" (`position`), 
-or the total motion at the fusion site (`motion`).
-The latter is what is more clinically relevant, and by measuring at
-the fusion site we remove the effect of differeing bending in the 3D printed
-bone analogoues.
-
-**Note that repeat 3 shows higher variation.**
-**This was also evident in the Instron raw data,** 
-**and may be due to some electrical interference.**
-
-```{r}
-#| label: fit_lines
-
-loading_models <- loading |>
-  group_by(plate, id, rep, cycle) |>
-  summarise(
-    position_model = list(
-      lm(load ~ position, data = pick(everything()))
-    ),
-    motion_model = list(
-      lm(load ~ motion, data = pick(everything()))
-    )
-  )
-
-# Extract the slope components (estimate) of the models
-stiffness <- loading_models |>
-  mutate(across(ends_with("model"), ~ purrr::map(.x, broom::tidy), 
-                .names = "{.col}_tidy")) |> 
-  tidyr::unnest(ends_with("tidy"), names_sep = "_") |>
-  filter(position_model_tidy_term != "(Intercept)") |> 
-  select(cycle, ends_with("estimate")) |>
-  rename_with(~ stringr::str_remove(.x, "_model_tidy_estimate"))
-
-# Plot the stiffnesses per cycle as a check
-stiffness |> 
-  filter(id == 1) |>
-  ggplot() +
-  aes(x= cycle, y = motion, colour = plate) +
-  geom_point() +
-  facet_grid(rows = vars(plate), cols = vars(rep)) +
-  labs(title = "stiffness - plate 1 all repeats")
-
-stiffness |> 
-  filter(rep == 1) |> 
-  ggplot() +
-  aes(x= cycle, y = motion, colour = plate) +
-  geom_point() +
-  facet_grid(cols = vars(id), rows = vars(plate)) +
-  labs(title = "stiffness - repeat 1 of each plate")
-
-```
-
-## check for effect of cycling
-
-We have six plates.
-Plate 1 was tested multiple times, to measure the effect of repeat testing.
-Plates 2 -- 6 were each tested once.
-Every test was made up of 60 cycles, with two cycles recorded every 10 - so
-cycles 9, 10, 19, 20, 29, 30, 39, 40, 49, 50, 50, 60.
-
-To test if the number of cycles is having an effect use a repeated 
-measures ANOVA, as the cycles are repeated on the same subject for each test.
-
-```{r}
-#| label: repeated_measures_anova
-
-plate_1 <- stiffness |>
-  ungroup() |>
-  filter(id == 1)
-
-plate_1 |> 
-  nest_by(plate) |>  
-  mutate(model = list(aov(motion ~ cycle + Error(rep/cycle), data = data))) |> 
-  mutate(sum = list(broom::tidy(model))) |> 
-  tidyr::unnest(sum)
-
-# Check for any trend in the stiffness measured over time by fitting a line to
-# stiffness vs cycle and checking if the the slope of that line is 
-# significantly different to zero
-# Note that there are a lot of comparisons, so use a correction for this.
-# Also note that p.adjust doesn't work if the dataframe is grouped (returns p)
-plate_1 |> 
-  mutate(cycle = as.numeric(cycle)) |> 
-  nest_by(plate, rep) |> 
-  summarise(model = list(lm(formula = motion ~ cycle, data = data))) |> 
-  mutate(tidy = purrr::map(model, broom::tidy)) |> 
-  tidyr::unnest(tidy) |> 
-  filter(term == "cycle") |>
-  ungroup() |>
-  mutate(p.adj = p.adjust(p.value, "holm"))
-
-```
-None of the slopes are significant, so can conclude that the stiffness is not 
-changed by multiple cycles.
-This means they can be averaged to reduce the variation between cycles.
-
-Use the averaged slopes in an ANOVA to look for differences due to plate type.
-```{r}
-
-model <- stiffness |>
-  summarise(stiffness = mean(motion)) |>
-  ungroup() |>
-  filter(rep == 1) |>
-  aov(stiffness ~ plate, data = _)
-
-summary(model)
-```
-
-There are anomalies in the motion data.
-The first cycles begins at u == 0, by definition (load about 20 N), 
-but subsequent cycles begin at variable positions depending on exactly where 
-the cycle start was found.
-Likewise, some tests show an anomaly at the peak motion, probably due again to
-not quite catching the turning points.
-
-Fix these by starting at the first point where u >= 0. 
-At the top can just trim the last two data points to avoid the issue, 
-but it doesn't have much effect on the slope calculation so leave it for now.
-
-```{r}
-loading <- loading |> 
-  group_by(plate, id, rep, cycle) |> 
-  filter(u > 0) 
-
-loading |>
-  summarise(load=min(load), pos=min(position)) |> print(n=Inf)
-```
-
 
 ## fusion site motion
 
@@ -390,8 +270,125 @@ print(plot_p)
 ggsave(filename = here::here("data", "motion_vs_rep.png"), plot = plot_p)
 ```
 
+
+## analysis
+
+To get the stiffness of each test we fit a linear model by least squares.
+
+We can analyse total motion at the end of the "metacarpal" (`position`), 
+or the total motion at the fusion site (`motion`).
+The latter is what is more clinically relevant, and by measuring at
+the fusion site we remove the effect of differing bending in the 3D printed
+bone analogues.
+
+**Note that repeat 3 shows more variation.**
+**This was also evident in the Instron raw data,** 
+**and may be due to some electrical interference.**
+
 ```{r}
-# COmpare average stiffness between plates
+#| label: fit_lines
+
+loading_models <- loading |>
+  group_by(plate, id, rep, cycle) |>
+  summarise(
+    position_model = list(
+      lm(load ~ position, data = pick(everything()))
+    ),
+    motion_model = list(
+      lm(load ~ motion, data = pick(everything()))
+    )
+  )
+
+# Extract the slope components (estimate) of the models
+stiffness <- loading_models |>
+  mutate(across(ends_with("model"), ~ purrr::map(.x, broom::tidy), 
+                .names = "{.col}_tidy")) |> 
+  tidyr::unnest(ends_with("tidy"), names_sep = "_") |>
+  filter(position_model_tidy_term != "(Intercept)") |> 
+  select(plate, id, rep, cycle, ends_with("estimate")) |>
+  rename_with(~ stringr::str_remove(.x, "_model_tidy_estimate"))
+
+# Plot the stiffness per cycle as a check
+stiffness |> 
+  filter(id == 1) |>
+  ggplot() +
+  aes(x= cycle, y = motion, colour = plate) +
+  geom_point() +
+  facet_grid(rows = vars(plate), cols = vars(rep)) +
+  labs(title = "stiffness - plate 1 all repeats")
+
+stiffness |> 
+  filter(rep == 1) |> 
+  ggplot() +
+  aes(x= cycle, y = motion, colour = plate) +
+  geom_point() +
+  facet_grid(cols = vars(id), rows = vars(plate)) +
+  labs(title = "stiffness - repeat 1 of each plate")
+
+```
+
+## check for effect of cycling
+
+We have six plates.
+Plate 1 of each type was tested multiple times, 
+to measure the effect of repeat testing.
+Plates 2 -- 6 of each type were each tested once.
+Every test was made up of 60 cycles, with two cycles recorded every 10 - so
+cycles 9, 10, 19, 20, 29, 30, 39, 40, 49, 50, 50, 60.
+
+To test if repeated cycling is having an effect use a repeated 
+measures ANOVA, as the cycles are repeated on the same subject for each test.
+
+```{r}
+#| label: repeated_measures_anova
+
+# For repeats of the first plate
+stiffness |> 
+  ungroup() |> 
+  filter(id == 1) |> 
+  nest_by(plate) |> 
+  mutate(model = list(aov(motion ~ cycle + Error(factor(rep)), data = data)),
+         summary = list(broom::tidy(model))
+         ) |> 
+  tidyr::unnest(summary) |> 
+  select(-data, -model)
+
+# Across plates
+stiffness |> 
+  ungroup() |> 
+  filter(rep == 1) |> 
+  nest_by(plate) |> 
+  mutate(model = list(aov(motion ~ cycle + Error(factor(id)), data = data)),
+         summary = list(broom::tidy(model))
+         ) |> 
+  tidyr::unnest(summary) |> 
+  select(-data, -model)
+
+```
+None of the tests are significant, so we can conclude that the stiffness is not 
+changed by multiple cycles.
+This means they can be averaged to reduce the variation between cycles.
+
+Use the averaged stiffnesses in an ANOVA to look for differences due to plate type.
+```{r}
+#| label: compare_plates
+#| warning: false
+#| message: false
+
+model <- stiffness |>
+  summarise(stiffness = mean(motion), .groups = "keep") |>
+  ungroup() |>
+  filter(rep == 1) |>
+  aov(stiffness ~ plate, data = _)
+
+summary(model)
+```
+
+This shows no significant difference between the two plate designs.
+The box plot shows this graphically.
+
+```{r}
+# Compare average stiffness between plates
 
 plot_box <- loading |>
     filter(rep == 1) |>
@@ -399,106 +396,12 @@ plot_box <- loading |>
     ggplot() + 
     aes(y = motion, x = plate) +
     geom_boxplot() +
-    theme_bw(base_size = 12)
+    theme_bw(base_size = 14)
     #labs(title = "plate stiffness")
 print(plot_box)
 
-ggsave(filename = here::here("data", "stiffness_between_plates.png"), plot = plot_box, width = 7, height = 5)
-```
-
-
-```{r}
-# plot U & V vs load
-# Rearrange to long form for easier plotting in ggplot
-loading_long <- loading |> 
-    tidyr::pivot_longer(cols = c(u, v), names_to = "axis", values_to = "motion")
-# Make a plot for each plate tpye
-for (p in c("Long", "Short")) {
-    plot_p <- loading_long |>
-        filter(plate == p) |>
-        ggplot() + 
-        aes(y = motion, x = load, colour = cycle, group = uid) +
-        geom_line() +
-        facet_grid(rows = vars(axis), cols = vars(rep)) +
-        labs(title = paste0("load vs position - ", p))
-    print(plot_p)
-}
-```
-
-
-## plot combined motion
-
-```{r}
-
-for (p in c("Long", "Short")) {
-  plot_p <- loading |> 
-    mutate(motion = sqrt(u^2 + v^2 + w^2)) |>
-    filter(plate == p) |>
-    ggplot() + 
-    aes(y = motion, x = load, colour = cycle, group = uid) +
-    geom_line() +
-    ylim(c(0,0.6)) +
-    facet_grid(rows = vars(id), cols = vars(rep)) +
-    labs(title = paste0("load vs position - ", p))
-  
-  print(plot_p)
-}
-
-```
-
-## compare combined motion
-
-```{r}
-# Plate 1 was used to test the effect of multiple repeats, 
-# but for the inter-plate comparison only use the first rep to match the others.
-plates_rep <- loading |> 
-    mutate(motion = sqrt(u^2 + v^2 + w^2)) |>
-    filter(rep == 1)
-
-# Repeat the stiffness analysis above, but for the combined fusion site motion.
-motion_models <- loading |> 
-  mutate(motion = sqrt(u^2 + v^2 + w^2)) |>
-  group_by(plate, id, rep, cycle) |>
-  summarise(
-    model = list(
-      lm(load ~ motion, data = pick(everything()))
-    )
-  ) |> 
-  mutate(tidy = purrr::map(model, broom::tidy)) |> 
-  tidyr::unnest(tidy) |> 
-  filter(term != '(Intercept)')
-
-# Check for an effect of cycling with a repeated measures ANOVA
-motion_models |>
-  filter(id == 1)|> # The first plate id has multiple reps
-  ungroup() |>
-  nest_by(plate) |>  
-  mutate(model = list(aov(estimate ~ cycle + Error(rep/cycle), data = data))) |> 
-  mutate(sum = list(broom::tidy(model))) |> 
-  tidyr::unnest(sum)
-
-motion_models |>
-  filter(rep == 1)|> # The first rep has multiple plate id
-  ungroup() |>
-  nest_by(plate) |>  
-  mutate(model = list(aov(estimate ~ cycle + Error(id/cycle), data = data))) |> 
-  mutate(sum = list(broom::tidy(model))) |> 
-  tidyr::unnest(sum)
-
-
-```
-
-
-
-## notes
-
-
-
-```{r}
-#| label: scratchpad
-
-# Make a vector of the actual cycle numbers we recorded:
-#   9, 10, 19, 20, 29, 30 , 39, 40, 49, 50 , 59, 60
-actual_cycles <- 10 * rep(1:6, each = 2) - rep(1:0, 6)
+ggsave(filename = here::here("data", "stiffness_between_plates.png"), 
+       plot = plot_box, 
+       width = 10, height = 5, units = "cm")
 ```
 

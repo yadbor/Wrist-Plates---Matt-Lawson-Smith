@@ -388,7 +388,16 @@ This shows no significant difference between the two plate designs.
 The box plot shows this graphically.
 
 ```{r}
+#| label: compare_plate_types
+#| message: false
+#| warning: false
+
 # Compare average stiffness between plates
+
+# This is for insertion into Matt's presentation, so want to use the font 
+# Calibri, like the rest of the slides. These need to be installed previously.
+
+extrafont::loadfonts() # makes other fonts available to R
 
 plot_box <- loading |>
     filter(rep == 1) |>
@@ -396,12 +405,12 @@ plot_box <- loading |>
     ggplot() + 
     aes(y = motion, x = plate) +
     geom_boxplot() +
-    theme_bw(base_size = 14)
+    theme_bw(base_size = 14, base_family = "Calibri") 
     #labs(title = "plate stiffness")
 print(plot_box)
 
 ggsave(filename = here::here("data", "stiffness_between_plates.png"), 
        plot = plot_box, 
-       width = 10, height = 5, units = "cm")
+       width = 21, height = 12, units = "cm")
 ```
 

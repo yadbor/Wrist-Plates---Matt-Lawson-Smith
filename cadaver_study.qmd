@@ -52,10 +52,10 @@ names(raw_files) <- basename(raw_files)
 all_results <- raw_files |>
   purrr::map(\(f) readr::read_csv(file = f, show_col_types = FALSE)) |>
   bind_rows(.id = "filename") |>
-  # drop unused columns
-  select(filename, all_of(data_cols)) |>
   # clean up and simplify names
-  rename(frame = "File Number", u = "U [mm]", v = "V [mm]", w = "W [mm]", time = "Time_1") |>
+  rename(frame = "File Number", time = "Time_1") |>
+  rename_with(~ stringr::str_remove(.x, "\\s*\\[.+\\]") |> stringr::str_to_lower()) |>
+  select(-"time_0") |> # Don;t need two time columns
   # fix the spelling of parts of the filename
   # First fix a known typo
   mutate(filename = stringr::str_replace(filename, "(?i)poximal", "proximal")) |>
@@ -91,16 +91,6 @@ Can then write the cleaned results out.
 readr::write_csv(all_results, file = here::here("data", "cadaver_all_results.csv"))
 ```
 
-If the data files have already been cleaned up and combined, 
-just read the processed data from `cadaver_all_results.csv`.
-
-```{r}
-#| label: read_data
-#| eval: false # change this to read the file
-all_results <- readr::read_csv(file = here::here("data", "cadaver_all_results.csv"),
-                               show_col_types = FALSE)
-```
-
 ## analyse cycles
 
 Each test has multiple load-unload cycles. 
@@ -116,7 +106,7 @@ towards a trough.
 The `bluer` package has routines for finding peaks and labelling cycles 
 and phases.
 
-But first, as these tests are all in compression, both the load and position 
+As these tests are all in compression, both the load and position 
 are negative.
 Invert them both so that graphs read better for most people.
 
@@ -124,11 +114,43 @@ Invert them both so that graphs read better for most people.
 #| label: label_cycles
 
 cycles <- all_results |> 
+    # drop unused columns
+  # select(filename, all_of(data_cols)) |>
   mutate(position = -1.0 * position, load = -1.0 * load) |> # Invert these axes
   mutate(across(id:marker, factor)) |> # Convert all id columns to factors
   group_by(id, arm, plate, marker) |> # group each test
   mutate(as_tibble(bluer::label_cycles(position))) |> # and label the cycles
   mutate(uid = paste0(id, arm, plate, marker, cycle)) # uniquely identify each cycle
+```
+
+
+Save the labelled data.
+```{r}
+#| label: write_cleaned_data
+readr::write_csv(cycles, file = here::here("data", "cadaver_cycles.csv"))
+```
+
+If the data files have already been cleaned up and combined, 
+just read the processed data from `cadaver_cycles.csv`.
+
+```{r}
+#| label: read_data
+#| eval: false # change this to read the file
+cycles <- readr::read_csv(file = here::here("data", "cadaver_cycles.csv"),
+                               show_col_types = FALSE)
+```
+
+
+Check that the markers are correctly labelled.
+The test geometry always puts the proximal marker to the right, 
+so the proximal X coordinate will be greater than the distal X coordinate.
+
+```{r}
+cycles |> 
+  filter(cycle == 1) |> # X, Y, Z are determined by the first frame
+  summarise(x = first(x)) |> 
+  tidyr::pivot_wider(names_from = marker, values_from = x) |> 
+  mutate(proximal_right = proximal > distal)
 ```
 
 
@@ -249,76 +271,16 @@ $$ motion = \sqrt{u^2 + v^2 + w^2} $$
 
 ```{r}
 loading <- loading |> 
-  mutate(motion = sqrt(inc_u^2 + inc_v^2 + inc_w^2)) 
+  mutate(motion = sqrt(u^2 + v^2 + w^2)) 
 
 loading |>
-    ggplot() + 
-    aes(x = load, y = motion, colour = factor(cycle), group = uid) +
-    geom_line() +
-    facet_grid(plate + marker ~ id, scales = "free") +
-    guides(colour=FALSE) +
-    labs(title = "motion vs load - by plate, marker and id", 
-         x = "cycle", y = "total motion")
+  ggplot() + 
+  aes(x=load, y = motion, colour = marker, group = uid) + 
+  geom_line() + 
+  geom_smooth(method="lm", se = FALSE, colour = "black", linetype = 2, linewidth = 0.5) +
+  facet_grid(id+plate~cycle) +
+  labs(title = "motion vs load per cycle")
 ```
-
-There still appear to be some kinks at the start of the data for 
-the distal marker short plate for `MSD575`, `MSD663` and `MSD664`.
-Checking, it looks like random variation, ecept for three cycles of `MSD664`.
-
-```{r}
-loading |>
-    filter(id %in% c("MSD575", "MSD663", "MSD664"), marker == "distal", plate == "S") |>
-    ggplot() + 
-    aes(x = load, y = motion, colour = factor(cycle), group = uid) +
-    geom_line() + geom_point() +
-    facet_grid(id ~ ., scales = "free") +
-    #guides(colour=FALSE) +
-    labs(title = "motion vs load - by plate, marker and id", 
-         x = "cycle", y = "total motion")
-
-```
-
-```{r}
-loading |>
-    filter(id == "MSD664", marker == "distal", plate == "S") |>
-    ggplot() + 
-    aes(x = load, y = motion, colour = factor(cycle), group = uid) +
-    geom_line() + geom_point() +
-    facet_grid( ~ cycle, scales = "free") +
-    #guides(colour=FALSE) +
-    labs(title = "motion vs load - by plate, marker and id", 
-         x = "cycle", y = "total motion")
-
-```
-
-## fusion site motion
-
-```{r}
-# Make a plot for each plate
-
-plot_p <- loading |>
-    ggplot() + 
-    aes(y = motion, x = load, colour = cycle, group = uid) +
-    geom_line() +
-    facet_grid(rows = vars(plate), cols = vars(id)) +
-    labs(title = "load vs motion")
-print(plot_p)
-ggsave(filename = here::here("data", "motion_vs_cycle.png"), plot = plot_p)
-```
-```{r}
-# Make a plot for each repeat
-
-plot_p <- loading |>
-    filter(id == 1) |>
-    ggplot() + 
-    aes(y = motion, x = load, colour = cycle, group = uid) +
-    geom_line() +
-    facet_grid(rows = vars(plate), cols = vars(rep)) +
-    labs(title = "load vs motion")
-print(plot_p)
-ggsave(filename = here::here("data", "motion_vs_rep.png"), plot = plot_p)
-```
-
 
 ## analysis
 
@@ -330,15 +292,12 @@ The latter is what is more clinically relevant, and by measuring at
 the fusion site we remove the effect of differing bending in the 3D printed
 bone analogues.
 
-**Note that repeat 3 shows more variation.**
-**This was also evident in the Instron raw data,** 
-**and may be due to some electrical interference.**
 
 ```{r}
-#| label: fit_lines
-
+#| label: linear_model_fitting
+# fit a linear model to each cycle
 loading_models <- loading |>
-  group_by(plate, id, rep, cycle) |>
+  group_by(id, arm, plate, marker, cycle) |>
   summarise(
     position_model = list(
       lm(load ~ position, data = pick(everything()))
@@ -350,38 +309,44 @@ loading_models <- loading |>
 
 # Extract the slope components (estimate) of the models
 stiffness <- loading_models |>
-  mutate(across(ends_with("model"), ~ purrr::map(.x, broom::tidy), 
-                .names = "{.col}_tidy")) |> 
+  group_by(id, arm, plate, marker, cycle) |>
+  mutate(
+    across(ends_with("model"), ~ purrr::map(.x, broom::tidy), .names = "{.col}_tidy")
+    ) |>
   tidyr::unnest(ends_with("tidy"), names_sep = "_") |>
-  filter(position_model_tidy_term != "(Intercept)") |> 
-  select(plate, id, rep, cycle, ends_with("estimate")) |>
+  filter(if_any(ends_with("term"), \(c) c != "(Intercept)")) |>
+  select(ends_with("estimate")) |>
   rename_with(~ stringr::str_remove(.x, "_model_tidy_estimate"))
+```
 
+
+```{r}
+#| label: plot_liner_model_stiffness
 # Plot the stiffness per cycle as a check
 stiffness |> 
-  filter(id == 1) |>
   ggplot() +
   aes(x= cycle, y = motion, colour = plate) +
   geom_point() +
-  facet_grid(rows = vars(plate), cols = vars(rep)) +
-  labs(title = "stiffness - plate 1 all repeats")
+  facet_grid(marker ~ id) + 
+  labs(title = "stiffness per cycle")
 
 stiffness |> 
-  filter(rep == 1) |> 
   ggplot() +
-  aes(x= cycle, y = motion, colour = plate) +
-  geom_point() +
-  facet_grid(cols = vars(id), rows = vars(plate)) +
-  labs(title = "stiffness - repeat 1 of each plate")
+  aes(x= plate, y = motion, colour = plate) +
+  geom_boxplot() +
+  facet_grid(marker ~ id) + 
+  labs(title = "stiffness", y = "N/mm marker motion")
 
+stiffness |> 
+  ggplot() +
+  aes(x= plate, y = position, colour = plate) +
+  geom_boxplot() +
+  facet_grid(marker ~ id) + 
+  labs(title = "stiffness", y = "N/mm marker motion")
 ```
 
 ## check for effect of cycling
 
-We have six plates.
-Plate 1 of each type was tested multiple times, 
-to measure the effect of repeat testing.
-Plates 2 -- 6 of each type were each tested once.
 Every test was made up of 60 cycles, with two cycles recorded every 10 - so
 cycles 9, 10, 19, 20, 29, 30, 39, 40, 49, 50, 50, 60.
 
@@ -394,27 +359,29 @@ measures ANOVA, as the cycles are repeated on the same subject for each test.
 # For repeats of the first plate
 stiffness |> 
   ungroup() |> 
-  filter(id == 1) |> 
-  nest_by(plate) |> 
-  mutate(model = list(aov(motion ~ cycle + Error(factor(rep)), data = data)),
+  #select(-arm) |>
+  nest_by(id, plate,marker) |>
+  mutate(model = list(aov(motion ~ cycle, data = data)),
          summary = list(broom::tidy(model))
-         ) |> 
-  tidyr::unnest(summary) |> 
-  select(-data, -model)
+  ) |>
+  tidyr::unnest(summary) |>
+  select(-data, -model) |>
+  filter(!is.na(p.value))
 
 # Across plates
 stiffness |> 
   ungroup() |> 
-  filter(rep == 1) |> 
-  nest_by(plate) |> 
+  nest_by(plate, marker) |> 
   mutate(model = list(aov(motion ~ cycle + Error(factor(id)), data = data)),
          summary = list(broom::tidy(model))
          ) |> 
   tidyr::unnest(summary) |> 
-  select(-data, -model)
+  select(-data, -model) |>
+  filter(!is.na(p.value))
 
 ```
-None of the tests are significant, so we can conclude that the stiffness is not 
+Only one result (proximal marker for long plates) was significant.
+It is not unreasonable to can conclude that the stiffness is generally not 
 changed by multiple cycles.
 This means they can be averaged to reduce the variation between cycles.
 
@@ -427,13 +394,12 @@ Use the averaged stiffnesses in an ANOVA to look for differences due to plate ty
 model <- stiffness |>
   summarise(stiffness = mean(motion), .groups = "keep") |>
   ungroup() |>
-  filter(rep == 1) |>
-  aov(stiffness ~ plate, data = _)
+  aov(stiffness ~ plate+marker, data = _)
 
 summary(model)
 ```
 
-This shows no significant difference between the two plate designs.
+This shows a significant difference between the two plate designs.
 The box plot shows this graphically.
 
 ```{r}
@@ -449,12 +415,12 @@ The box plot shows this graphically.
 extrafont::loadfonts() # makes other fonts available to R
 
 plot_box <- loading |>
-    filter(rep == 1) |>
     mutate(stiffness = mean(motion)) |>
     ggplot() + 
     aes(y = motion, x = plate) +
     geom_boxplot() +
-    theme_bw(base_size = 14, base_family = "Calibri") 
+    theme_bw(base_size = 14, base_family = "Calibri") +
+    facet_grid(.~marker)
     #labs(title = "plate stiffness")
 print(plot_box)
 

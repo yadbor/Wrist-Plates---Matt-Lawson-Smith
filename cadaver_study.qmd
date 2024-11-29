@@ -47,12 +47,12 @@ raw_files = list.files(path = data_root,
 raw_files <- raw_files |>
   stringr::str_subset(pattern = "(?i)Marker_Data") # Case insensitive match needed
 
-# Some tests were analysed without removing rigid motion of the wrist marker,
+# Some tests were analysed without removing rigid motion of the radius marker,
 # to check that motion reduction was working as anticipated.
 # Remove these from the list of files to analyse.
 
 raw_files <- raw_files |>
-  stringr::str_subset(pattern = "MOTION", negate = TRUE)
+  stringr::str_subset(pattern = "(?i)MOTION|Radius", negate = TRUE)
 
 # Name the vector with the filename, which bind_rows will turn into a column
 names(raw_files) <- basename(raw_files)

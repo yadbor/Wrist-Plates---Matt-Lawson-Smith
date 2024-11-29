@@ -25,10 +25,9 @@ library(ggplot2) # for plotting
 # devtools::install_github(repo = "yadbor/bluer")
 library(bluer) # routines for analysing mechanical test data
 
-data_root <- here::here("data-raw")
+cleaned_file <- "cadaver_all_results.csv"
+cycles_file <- "cadaver_cycles.csv"
 
-data_col_names <- "File Number,U [mm],V [mm],W [mm],Time_1,position,load"
-data_cols <- stringr::str_split_1(data_col_names, ",")
 ```
 
 ## read the data files
@@ -36,8 +35,10 @@ data_cols <- stringr::str_split_1(data_col_names, ",")
 Use the code below to read all of the .csv files output from VIC-3D.
 ```{r}
 #| label: read_raw_files
-#| 
-raw_files = list.files(path = here::here("data-raw", "cadaver_csv_files"),
+
+data_root <- here::here("data-raw", "cadaver_csv_files")
+
+raw_files = list.files(path = data_root,
                        pattern = "csv$",
                        recursive = TRUE,
                        full.names = TRUE,
@@ -45,8 +46,17 @@ raw_files = list.files(path = here::here("data-raw", "cadaver_csv_files"),
                        )
 raw_files <- raw_files |>
   stringr::str_subset(pattern = "(?i)Marker_Data") # Case insensitive match needed
+
+# Some tests were analysed without removing rigid motion of the wrist marker,
+# to check that motion reduction was working as anticipated.
+# Remove these from the list of files to analyse.
+
+raw_files <- raw_files |>
+  stringr::str_subset(pattern = "MOTION", negate = TRUE)
+
 # Name the vector with the filename, which bind_rows will turn into a column
 names(raw_files) <- basename(raw_files)
+
 # Map the function read_csv() across all elements in raw_files, then bind the resulting dataframes
 # rowwise into a combined dataframe, putting the names from raw_files into a column "filename".
 all_results <- raw_files |>
@@ -88,7 +98,15 @@ Can then write the cleaned results out.
 
 ```{r}
 #| label: write_cleaned_data
-readr::write_csv(all_results, file = here::here("data", "cadaver_all_results.csv"))
+readr::write_csv(all_results, file = here::here("data", cleaned_file))
+```
+
+If using the precleaned results, load them here
+```{r}
+#| label: read_cleaned_data
+all_results <- readr::read_csv(file = here::here("data", cleaned_file), 
+                               show_col_types = FALSE)
+
 ```
 
 ## analyse cycles
@@ -118,7 +136,7 @@ cycles <- all_results |>
   # select(filename, all_of(data_cols)) |>
   mutate(position = -1.0 * position, load = -1.0 * load) |> # Invert these axes
   mutate(across(id:marker, factor)) |> # Convert all id columns to factors
-  group_by(id, arm, plate, marker) |> # group each test
+  group_by(across(where(is.factor))) |> # group each test
   mutate(as_tibble(bluer::label_cycles(position))) |> # and label the cycles
   mutate(uid = paste0(id, arm, plate, marker, cycle)) # uniquely identify each cycle
 ```
@@ -127,7 +145,7 @@ cycles <- all_results |>
 Save the labelled data.
 ```{r}
 #| label: write_cleaned_data
-readr::write_csv(cycles, file = here::here("data", "cadaver_cycles.csv"))
+readr::write_csv(cycles, file = here::here("data", cycles_file))
 ```
 
 If the data files have already been cleaned up and combined, 
@@ -136,19 +154,23 @@ just read the processed data from `cadaver_cycles.csv`.
 ```{r}
 #| label: read_data
 #| eval: false # change this to read the file
-cycles <- readr::read_csv(file = here::here("data", "cadaver_cycles.csv"),
+cycles <- readr::read_csv(file = here::here("data", cycles_file),
                                show_col_types = FALSE)
+# Remake thr grouping information
+cycles <- cycles |>
+  mutate(across(id:marker, factor)) |> # Convert all id columns to factors
+  group_by(across(where(is.factor)))
 ```
-
 
 Check that the markers are correctly labelled.
 The test geometry always puts the proximal marker to the right, 
 so the proximal X coordinate will be greater than the distal X coordinate.
 
 ```{r}
+#| message: FALSE
 cycles |> 
   filter(cycle == 1) |> # X, Y, Z are determined by the first frame
-  summarise(x = first(x)) |> 
+  summarise(x = first(x)) |> # just the first row of each
   tidyr::pivot_wider(names_from = marker, values_from = x) |> 
   mutate(proximal_right = proximal > distal)
 ```
@@ -199,6 +221,109 @@ loading |>
 ```
 The short plate test for MSD664 appears to have run twice as fast as the 
 long plate test, which needs more analysis.
+
+The Instron was programmed to move downwards at a constant speed, 
+reversing when the measured load reached 70N, 
+then moving back up until the load dropped to 7N.
+This was repeated for every cycle.
+
+Speed is `position / time`, which is the slope of the position vs time curve.
+
+```{r}
+#| label: check_MSD664
+loading |> 
+  filter(str_detect(filename, "(?i)664" ), 
+         marker == "distal", time < 800) |> 
+  mutate(dt = time - first(time), ds = position - first(position)) |> 
+  ggplot() + 
+  aes(y=ds, x = dt, colour = cycle, group = uid) + 
+  geom_point() + 
+  geom_line() + 
+  facet_grid(filename~.)
+```
+Check that all tests did in fact have the same speed.
+```{r}
+#| label: check_speeds
+#| message: false
+
+# Calculate the slope of position vs time
+
+# General version
+# speeds <- loading |>
+#   group_by(id, arm, plate, marker, cycle) |>
+#   summarise(
+#     model = list(
+#       lm(position ~ time, data = pick(everything()))
+#     )
+#   ) |> 
+#   mutate(
+#     across(ends_with("model"), ~ purrr::map(.x, broom::tidy), .names = "{.col}_tidy")
+#   ) |>
+#   tidyr::unnest(ends_with("tidy"), names_sep = "_") |>
+#   filter(if_any(ends_with("term"), \(c) c != "(Intercept)")) |>
+#   select(ends_with("estimate")) |>
+#   rename_with(~ stringr::str_remove(.x, "_model_tidy_estimate"))
+
+# Fit a straight line to position ~ time for each test, then extract the slopes
+speeds <- loading |>
+  group_by(id, arm, plate, marker, cycle) |>
+  summarise(
+        model = list(lm(position ~ time, data = pick(everything())))
+    ) |> 
+  mutate(params = purrr::map(model, broom::tidy)) |> 
+  tidyr::unnest(params) |> 
+  filter(term != "(Intercept)") |> 
+  select(estimate)
+
+# Summarise the speeds
+#numbers <- summary(speeds$estimate)
+cat("The measured test speeds across ", nrow(speeds), "cycles varied thus:\n")
+print(numbers)
+
+percent_spread <- 100 * (last(numbers) - first(numbers)) / numbers["Mean"] |> unname()
+cat("\nThis is a total variation of about", round(percent_spread, 1), "%")
+```
+
+This is a total variation of about `r round(percent_spread, 1)`, 
+so can accept that the speed was relatively constant.
+
+WH\hat about the shape of the load ~ position curve?
+```{r}
+#| label: MSD664_load_poition
+
+loading |> 
+    filter(str_detect(filename, "(?i)664" ), 
+           marker == "distal", time < 800) |> 
+    mutate(dt = time - first(time), ds = position - first(position)) |> 
+    ggplot() + 
+    aes(x=ds, y = load, colour = ordered(cycle), group = uid) + 
+    geom_hline(yintercept = c(7, 70), linetype = "dashed", colour = "darkred") +
+    geom_point() + 
+    geom_line() + 
+    facet_grid(plate ~ .) + 
+    labs(colour = "cycle", title = "load vs position for MSD664")
+    
+```
+It is clear that the short plate specimen is not only much stiffer than the
+long plate specimen, but also quite non-linear.
+This is more pronounced for this specimen than for other specimens,
+although some others do show similar non-linearity, 
+both for the long and short plate specimens.
+```{r}
+loading |> 
+    filter(marker == "distal", time < 800) |> 
+    mutate(dt = time - first(time), ds = position - first(position)) |> 
+    ggplot() + 
+    aes(x=ds, y = load, colour = ordered(cycle), group = uid) + 
+    geom_hline(yintercept = c(7, 70), linetype = "dashed") +
+    geom_point() + 
+    geom_line() + 
+    facet_grid(plate~id) + labs(colour = "cycle")
+```
+
+Note particularly MSD575 and MSD666 long and MSD649 both short and long.
+
+
 
 It is also obvious that there is a big time gap on some cycles, visible as a 
 horizonatal or near horizontal line.
@@ -317,6 +442,16 @@ stiffness <- loading_models |>
   filter(if_any(ends_with("term"), \(c) c != "(Intercept)")) |>
   select(ends_with("estimate")) |>
   rename_with(~ stringr::str_remove(.x, "_model_tidy_estimate"))
+```
+
+## save the calculated stiffness results
+
+Write out the calculated stifness results.
+These can be read to apply different analysis, without re-calculating from the raw data.
+
+```{r}
+#| label: save_stiffness
+readr::write_csv(stiffness, file = here::here("data", "cadaver_stiffness.csv"))
 ```
 
 

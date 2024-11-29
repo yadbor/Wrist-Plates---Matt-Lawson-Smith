@@ -124,7 +124,7 @@ Write the cleaned data to a `.csv` file before starting the analysis.
 #| label: save_data
 
 all_results |> 
-  readr::write_csv(file = here::here("data", "all_results.csv"))
+  readr::write_csv(file = here::here("data", "experiment_2_all_results.csv"))
 ```
 
 ## analyse cycles
@@ -160,7 +160,7 @@ cycles <- all_results |>
 Save the labelled data.
 ```{r}
 #| label: write_cleaned_data
-readr::write_csv(cycles, file = here::here("data", "experiment2_cycles.csv"))
+readr::write_csv(cycles, file = here::here("data", "experiment_2_cycles.csv"))
 ```
 
 If the data files have already been cleaned up and combined, 
@@ -173,7 +173,7 @@ the study metadata parsed out of the file name.
 ```{r}
 #| label: read_data
 #| eval: false # change this to read the file
-cycles <- readr::read_csv(file = here::here("data", "experiment2_cycles.csv"),
+cycles <- readr::read_csv(file = here::here("data", "experiment_2_cycles.csv"),
                                show_col_types = FALSE)
 ```
 

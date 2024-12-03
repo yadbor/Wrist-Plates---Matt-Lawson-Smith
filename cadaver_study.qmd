@@ -20,7 +20,7 @@ Load any needed libraries and define some constants.
 library(dplyr) # for manipulating dataframes
 library(ggplot2) # for plotting
 
-library(segmented)
+#library(segmented) # for segmented fits
 
 # If you don't have bluer install it with 
 # install.packages("devtools")
@@ -297,7 +297,7 @@ Plot the relative position and time for each cycle, to make the trends easier to
 ```{r}
 #| label: check_MSD664
 loading |> 
-  filter(str_detect(filename, "(?i)664" ), 
+  filter(stringr::str_detect(filename, "(?i)664" ), 
          marker == "distal", time < 800) |> 
   mutate(dt = time - first(time), ds = position - first(position)) |> 
   ggplot() + 
@@ -360,7 +360,7 @@ What about the shape of the load ~ position curve?
 #| label: MSD664_load_poition
 
 loading |> 
-    filter(str_detect(filename, "(?i)664" ), 
+    filter(stringr::str_detect(filename, "(?i)664" ), 
            marker == "distal") |> 
     mutate(dt = time - first(time), ds = position - first(position)) |> 
     ggplot() + 
@@ -402,22 +402,37 @@ Note particularly MSD575 and MSD666 long and MSD649 both short and long.
 
 ## motion data
 
-## clean the motion data
-
-
-There is some jiggle at the start of some cycles, 
-where the construct does not always return to the same position.
-Deal with that by creating incremental displacements for each cycle.
-
 ```{r}
-loading <- loading |>
-  mutate(across(c(u,v,w), \(m) m - first(m), .names = "inc_{.col}"))
+loading |> 
+  dplyr::select(u, v, w, time, position, load, uid) |> 
+  tidyr::pivot_longer(cols = c(u, v,w)) |> 
+  ggplot() + 
+  aes(x = value, y = load, colour = marker, group = uid) + 
+  geom_point() + 
+  facet_grid(name ~ id+plate)
 ```
+
+
+## total motion
 
 Calculate total motion for each marker.
 The `u` displacement is down (-ve), as is the `v` displacement generally.
 The total absolute displacement will always be positive:
 $$ motion = \sqrt{u^2 + v^2 + w^2} $$
+
+Then plot the total motion for each cycle of every test, for both markers.
+
+The motion at the end of the "metacarpal" (`position`), is derived from the 
+Instron output, but the more clinically relevant motion is at the markers.
+
+There were two markers: `distal`, placed in the base of the metacarpal,
+and `proximal` marker, placed as close as possible to the carpal bone under
+the fusion plate, generally the capitate.
+
+The rigid body of the distal radius marker has been subtracted in VIC-3D,
+so any variation in the rigidity of the specimen fixation has been removed.
+
+The total `motion` was calculated independently for each marker.
 
 ```{r}
 loading <- loading |> 
@@ -427,7 +442,7 @@ loading |>
   ggplot() + 
   aes(x=load, y = motion, colour = marker, group = uid) + 
   geom_line() + 
-  geom_smooth(method="lm", se = FALSE, colour = "black", linetype = 2, linewidth = 0.5) +
+  geom_smooth(method="lm", se = FALSE, colour = "darkgrey", linetype = 2, linewidth = 0.5) +
   facet_grid(id+plate~cycle) +
   labs(title = "motion vs load per cycle")
 ```
@@ -435,13 +450,9 @@ loading |>
 ## analysis
 
 To get the stiffness of each test we fit a linear model by least squares.
+This is the same as the usual "line of best fit", as shown in the plot above.
 
-We can analyse total motion at the end of the "metacarpal" (`position`), 
-or the total motion at the fusion site (`motion`).
-The latter is what is more clinically relevant, and by measuring at
-the fusion site we remove the effect of differing bending in the 3D printed
-bone analogues.
-
+A linear model was fit to the `position` data, using only the `distal`
 
 ```{r}
 #| label: linear_model_fitting
@@ -457,16 +468,39 @@ loading_models <- loading |>
     )
   )
 
+motion_models <- loading |>
+  group_by(id, arm, plate, marker, cycle) |>
+  summarise(
+    motion_model = list(
+      lm(load ~ motion, data = pick(everything()))
+    )
+  ) |>
+  tidyr::pivot_wider(id_cols = c(id, arm, plate, cycle), 
+                     names_from = marker, 
+                     values_from = motion_model)
+
+position_models <- loading |>
+  filter(marker == "distal") |> # It doesn't matter which in this case
+  group_by(id, arm, plate, cycle) |>
+  summarise(
+    position = list(
+      lm(load ~ position, data = pick(everything()))
+    )
+  )
+
+# Add the position column to the two markers
+loading_models <- left_join(motion_models, position_models)
+
 # Extract the slope components (estimate) of the models
 stiffness <- loading_models |>
-  group_by(id, arm, plate, marker, cycle) |>
+  group_by(id, arm, plate, cycle) |>
   mutate(
-    across(ends_with("model"), ~ purrr::map(.x, broom::tidy), .names = "{.col}_tidy")
+    across(c(distal, proximal, position), ~ purrr::map(.x, broom::tidy), .names = "{.col}_tidy")
     ) |>
   tidyr::unnest(ends_with("tidy"), names_sep = "_") |>
   filter(if_any(ends_with("term"), \(c) c != "(Intercept)")) |>
   dplyr::select(ends_with("estimate")) |>
-  rename_with(~ stringr::str_remove(.x, "_model_tidy_estimate"))
+  rename_with(~ stringr::str_remove(.x, "_tidy"))
 ```
 
 ## save the calculated stiffness results
@@ -484,25 +518,12 @@ readr::write_csv(stiffness, file = here::here("data", "cadaver_stiffness.csv"))
 #| label: plot_liner_model_stiffness
 # Plot the stiffness per cycle as a check
 stiffness |> 
-  ggplot() +
-  aes(x= cycle, y = motion, colour = plate) +
-  geom_point() +
-  facet_grid(marker ~ id) + 
-  labs(title = "stiffness per cycle")
-
-stiffness |> 
-  ggplot() +
-  aes(x= plate, y = motion, colour = plate) +
-  geom_boxplot() +
-  facet_grid(marker ~ id) + 
-  labs(title = "stiffness", y = "N/mm marker motion")
-
-stiffness |> 
-  ggplot() +
-  aes(x= plate, y = position, colour = plate) +
-  geom_boxplot() +
-  facet_grid(marker ~ id) + 
-  labs(title = "stiffness", y = "N/mm marker motion")
+  tidyr::pivot_longer(ends_with("estimate"), names_to = "location") |> 
+  ggplot() + 
+  aes(x=cycle, y = value, colour=plate) + 
+  geom_point() + 
+  facet_grid(location ~ id, scales = "free_y") +
+  labs(title = "stiffness per cycle", y = "stiffness (N/mm)")
 ```
 
 ## check for effect of cycling
@@ -515,6 +536,53 @@ measures ANOVA, as the cycles are repeated on the same subject for each test.
 
 ```{r}
 #| label: repeated_measures_anova
+
+# # Do independently
+# distal_effect <- stiffness |> 
+#   ungroup() |> 
+#   mutate(test = factor(paste0(id, plate)), cycle = factor(cycle)) |> # A factor for each test subject
+#   aov(formula = distal_estimate ~ cycle + Error(test))
+# broom::tidy(distal_effect) |> print()
+# 
+# proximal_effect <- stiffness |> 
+#   ungroup() |> 
+#   mutate(test = factor(paste0(id, plate)), cycle = factor(cycle)) |> # A factor for each test subject
+#   aov(formula = proximal_estimate ~ cycle + Error(test))
+# broom::tidy(proximal_effect) |> print()
+# 
+# # Explicit naming works inside summarise (across didn't seem to)
+# stiffness |>
+#   ungroup() |>
+#   mutate(test = factor(paste0(id, plate)), cycle = factor(cycle)) |>
+#   summarise(
+#     distal_effect = list(aov(formula = distal_estimate ~ cycle + Error(test)) |> broom::tidy()),
+#     proximal_effect = list(aov(formula = proximal_estimate ~ cycle + Error(test)) |> broom::tidy())
+#   ) |>
+#   tidyr::pivot_longer(cols = everything()) |>
+#   tidyr::unnest(cols = value, names_sep = "_")
+
+# Pivot longer and group to do them all together
+cycle_effect <- stiffness |>
+  rename_with(~ stringr::str_remove_all(.x, "_.+")) |> # don't need the complication
+  ungroup() |>
+  mutate(test = factor(paste0(id, plate)), cycle = factor(cycle)) |>
+  tidyr::pivot_longer(cols = c(distal, proximal), names_to = "measure") |>
+  group_by(measure) |>
+  summarise(
+    effect = list(aov(formula = value ~ cycle + Error(test)) |> broom::tidy())
+  ) |> 
+  tidyr::unnest(effect)
+
+cycle_effect
+```
+
+Since all p.values are > 0.05, we can reject an effect of cycling 
+(the smallest p = `r min(cycle_effect$p.value, na.rm = TRUE)`).
+
+```{r}
+# stiffness |> ungroup() |> mutate(test = factor(paste0(id, plate)), cycle = ordered(cycle)) |> tidyr::pivot_longer(cols = ends_with("estimate"), names_to = "measure") |> group_by(id, arm, plate, test, measure) |>  mutate(model = aov(formula = value ~ cycle + Error(test)))
+
+# position_aov <- stiffness |> ungroup() |> mutate(test = factor(paste0(id, plate)), cycle = ordered(cycle)) |> aov(formula = position_estimate ~ cycle + Error(test))
 
 # For repeats of the first plate
 stiffness |> 

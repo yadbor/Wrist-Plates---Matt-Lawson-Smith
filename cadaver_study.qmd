@@ -1,7 +1,7 @@
 ---
 title: "Medartis Wrist Plates"
-subtitle: "Experiment 2 - bending and shear matched"
-date: 2024-07-23
+subtitle: "Cadaver testing"
+date: 2024-12-09
 format: 
   html: default
   pdf: default
@@ -30,6 +30,12 @@ library(bluer) # routines for analysing mechanical test data
 cleaned_file <- "cadaver_all_results.csv"
 cycles_file <- "cadaver_cycles.csv"
 
+
+# To make for easier insertion into Microsoft presentations use Calibri, 
+# to match Microsoft's default font.
+# The extrafont library needs to be installed previously.
+extrafont::loadfonts() # makes other fonts available to R
+
 ```
 
 ## read the data files
@@ -46,8 +52,17 @@ raw_files = list.files(path = data_root,
                        full.names = TRUE,
                        ignore.case = TRUE
                        )
-raw_files <- raw_files |>
-  stringr::str_subset(pattern = "(?i)Marker_Data") # Case insensitive match needed
+#  # Use a case insensitive match in case of (known) spelling errors
+# raw_files <- raw_files |>
+#   stringr::str_subset(pattern = "(?i)Marker_Data")
+
+# Naming convention not followed in last set of extraction, 
+# so loosen the acceptance criteria.
+# Unfortunately some trial tests hae "marker" in the path, 
+# so only test the basename, which is stored in the list names()
+names(raw_files) <- basename(raw_files)
+keep <- names(raw_files) |>  stringr::str_subset(pattern = "(?i)Marker")
+raw_files <- raw_files[keep]
 
 # Some tests were analysed without removing rigid motion of the radius marker,
 # to check that motion reduction was working as anticipated.
@@ -164,7 +179,8 @@ cycles |>
     aes(x=time, y = value) + 
     geom_point() + 
     geom_line() + 
-    facet_grid(name~., scales="free_y")
+    facet_grid(name~., scales="free_y") +
+    theme_bw(base_size = 14, base_family = "Calibri")
 ```
 
 Fix this by looking for the large time gap between pairs of cycle recordings and
@@ -206,7 +222,7 @@ cycles <- cycles |>
 
 Save the labelled data.
 ```{r}
-#| label: write_cleaned_data
+#| label: write_labelled_data
 readr::write_csv(cycles, file = here::here("data", cycles_file))
 ```
 
@@ -215,7 +231,7 @@ the preceeding code can be skipped and the processed data just
 read from `cadaver_cycles.csv` (below).
 
 ```{r}
-#| label: read_data
+#| label: read_labelled_data
 #| eval: false # change this to read the file
 cycles <- readr::read_csv(file = here::here("data", cycles_file),
                                show_col_types = FALSE)
@@ -248,8 +264,12 @@ at time = 0.
 #| label: check_loading_shapes
 #| warning: false
 
-# As this is the applied load, it will be the same for either marker, so pick one.
-loading |> 
+# Take just the loading segment as it is more linear and controlled.
+loading <- cycles |> 
+    filter(seg == "load")
+
+# The applied load will be the same for either marker, so pick either one.
+loading |>
     filter(marker == 'distal') |> 
     mutate(dt = time - first(time)) |> 
     ggplot() + 
@@ -258,8 +278,10 @@ loading |>
       geom_point() + 
       geom_hline(yintercept = c(7, 70), linetype = "dashed", colour = "darkred") +
       geom_line(linewidth = 0.5) + 
-      facet_grid(id~plate) +
-      labs(title = "load x time", colour = "cycle")
+      facet_grid(id~plate) + 
+      theme(strip.text.y = element_text(angle = 0)) +
+      labs(title = "load x time", colour = "cycle") +
+      theme_bw(base_size = 14, base_family = "Calibri")
 
 ```
 
@@ -271,14 +293,16 @@ This missing data has no effect on the stiffness calculations.
 
 ## missing data
 
-There are no results for the `MSD601` short plate test, as the test failed, 
-and only 3 cycles in the long plate test, so drop `MSD601`.
+There are no results for the `MSD601` or `MSD648` short plate tests, 
+as the test failed.
+Also, `MSD601` only had 3 cycles in the long plate test.
+Drop these specimens as there are not comparable short plate results.
 
 ```{r}
 #| label: drop_bad_tests
 
 loading <- loading |>
-  filter(id != "MSD601")
+  filter(id != "MSD601", id != "MSD648")
 ```
 
 ## check test speed
@@ -304,7 +328,8 @@ loading |>
   aes(y=ds, x = dt, colour = cycle, group = uid) + 
   geom_point() + 
   geom_line() + 
-  facet_grid(filename~.)
+  facet_grid(filename~.) +
+  theme_bw(base_size = 14, base_family = "Calibri")
 ```
 
 Check that all tests did in fact have the same speed.
@@ -312,24 +337,6 @@ Check that all tests did in fact have the same speed.
 ```{r}
 #| label: check_speeds
 #| message: false
-
-# Calculate the slope of position vs time
-
-# General version
-# speeds <- loading |>
-#   group_by(id, arm, plate, marker, cycle) |>
-#   summarise(
-#     model = list(
-#       lm(position ~ time, data = pick(everything()))
-#     )
-#   ) |> 
-#   mutate(
-#     across(ends_with("model"), ~ purrr::map(.x, broom::tidy), .names = "{.col}_tidy")
-#   ) |>
-#   tidyr::unnest(ends_with("tidy"), names_sep = "_") |>
-#   filter(if_any(ends_with("term"), \(c) c != "(Intercept)")) |>
-#   dplyr::select(ends_with("estimate")) |>
-#   rename_with(~ stringr::str_remove(.x, "_model_tidy_estimate"))
 
 # Fit a straight line to position ~ time for each test, then extract the slopes
 speeds <- loading |>
@@ -343,9 +350,9 @@ speeds <- loading |>
   dplyr::select(estimate)
 
 # Summarise the speeds
-#numbers <- summary(speeds$estimate)
+numbers <- summary(speeds$estimate)
 cat("The measured test speeds across ", nrow(speeds), "cycles varied thus:\n")
-print(numbers)
+numbers
 
 percent_spread <- 100 * (last(numbers) - first(numbers)) / numbers["Mean"] |> unname()
 cat("\nThis is a total variation of about", round(percent_spread, 1), "%")
@@ -369,14 +376,15 @@ loading |>
     geom_point() + 
     geom_line() + 
     facet_grid(plate ~ .) + 
-    labs(colour = "cycle", title = "load vs position for MSD664")
+    labs(colour = "cycle", title = "load vs position for MSD664") +
+    theme_bw(base_size = 14, base_family = "Calibri")
     
 ```
 
 It is clear that the short plate specimen is not only much stiffer than the
 long plate specimen, but also quite non-linear.
 This is more pronounced for this specimen than for other specimens,
-although some others do show similar non-linearity, 
+although some other specimens do show similar non-linearity, 
 for both the long and short plate specimens.
 
 The change in slope probably indicates some joints in the carpus closing under
@@ -395,32 +403,13 @@ loading |>
     geom_hline(yintercept = c(7, 70), linetype = "dashed") +
     geom_point() + 
     geom_line() + 
-    facet_grid(plate~id) + labs(colour = "cycle")
+    facet_grid(plate~id) + labs(colour = "cycle") +
+    theme_bw(base_size = 14, base_family = "Calibri")
 ```
 
 Note particularly MSD575 and MSD666 long and MSD649 both short and long.
 
 ## motion data
-
-```{r}
-loading |> 
-  dplyr::select(u, v, w, time, position, load, uid) |> 
-  tidyr::pivot_longer(cols = c(u, v,w)) |> 
-  ggplot() + 
-  aes(x = value, y = load, colour = marker, group = uid) + 
-  geom_point() + 
-  facet_grid(name ~ id+plate)
-```
-
-
-## total motion
-
-Calculate total motion for each marker.
-The `u` displacement is down (-ve), as is the `v` displacement generally.
-The total absolute displacement will always be positive:
-$$ motion = \sqrt{u^2 + v^2 + w^2} $$
-
-Then plot the total motion for each cycle of every test, for both markers.
 
 The motion at the end of the "metacarpal" (`position`), is derived from the 
 Instron output, but the more clinically relevant motion is at the markers.
@@ -429,59 +418,137 @@ There were two markers: `distal`, placed in the base of the metacarpal,
 and `proximal` marker, placed as close as possible to the carpal bone under
 the fusion plate, generally the capitate.
 
-The rigid body of the distal radius marker has been subtracted in VIC-3D,
+The rigid body of the marker on the distal radius was subtracted in VIC-3D,
 so any variation in the rigidity of the specimen fixation has been removed.
 
-The total `motion` was calculated independently for each marker.
+The motion of the proximal marker therefore represents the motion of the
+intermediate carpal bone in the fixation (usually the capitate), 
+while the distal marker tracks the motion of the middle metacarpal relative to
+the radius.
+
+To get the motion of the metacarpal realtive to the carpal, which is the motion
+at the distal bone to bone fusion site, subtract the motion of the proximal 
+marker from the distal marker for each axis.
+```{r}
+#| label: calulate_relative_motion
+#| message: false
+#| 
+# To subtract one marker from another, first get them into seperate columns,
+# then do the subtraction, then put them back into one column x their components.
+# 
+# Take a dataframe with columns (... marker, u, v, w)
+# pivot to (... marker, axis, value), then back to (axis, distal, proximal)
+# Subtract proximal from distal, then pivot to (... marker, axis, value) 
+# and finally pivot back to (... marker, u, v, w)
+rel_motion <- loading |> 
+  select(u:w, time,load,position) |> 
+  tidyr::pivot_longer(cols = u:w, names_to = "axis") |> 
+  tidyr::pivot_wider(names_from = marker) |> 
+  mutate(abs_distal = distal, distal = distal - proximal) |> 
+  tidyr::pivot_longer(c(abs_distal, proximal, distal), names_to = "marker") |> 
+  tidyr::pivot_wider(names_from = axis) |> 
+  group_by(marker, .add = TRUE) # put back the group lost during the pivots
+
+```
+
+## total motion
+
+Calculate total motion for each marker.
+The `u` displacement is down (-ve), as is the `v` displacement generally.
+The total absolute displacement will always be positive:
+$$ motion = \sqrt{u^2 + v^2 + w^2} $$
+```{r}
+#| label: calculate_total_motion
+
+# Make all motion relative to the start of each cycle, 
+# to avoid issues when adding to get total relative motion.
+rel_motion <- rel_motion |>
+  mutate(u = u - first(u), v = v - first(v), w = w - first(w)) |>
+  mutate(motion = sqrt(u^2 + v^2 + w^2)) # then sum the components
+
+```
+
+Now recombine the total motion for each marker with the load and position data
+from the Instron.
 
 ```{r}
-loading <- loading |> 
-  mutate(motion = sqrt(u^2 + v^2 + w^2)) 
+#| label: recombine_data
+#| message: false
 
-loading |>
+# Just the combined motion, into one column per marker, so one row per frame.
+motion_only <- rel_motion |> 
+  select(-(u:w)) |> 
+  tidyr::pivot_wider(values_from = motion, names_from = marker) 
+
+# Only want one Instron row for each marker row (had two markers & now have 3)
+instron_only <- loading |> 
+  ungroup() |> 
+  distinct(id, arm, plate, cycle, frame, time, position, load)
+
+# Joint he two data frames by their common columns
+motion <- left_join(instron_only, motion_only)
+
+```
+
+Then plot the total _relative_ motion for each cycle of every test, 
+for both markers.
+
+```{r}
+#| label: plot_motion_per_cycle
+#| message: false
+
+# Rearrange to make plotting easier first
+all_data_plot <- motion |> 
+  tidyr::pivot_longer(
+    cols = c(abs_distal, distal, proximal),
+    values_to = "motion",
+    names_to = "marker"
+  ) |> 
+  filter(marker != "abs_distal") |> 
   ggplot() + 
-  aes(x=load, y = motion, colour = marker, group = uid) + 
-  geom_line() + 
+  aes(x = load, y = motion, colour = marker, 
+      group = paste0(id, plate, cycle, marker) # one group for each line to draw
+      ) + 
+  geom_point(size = 0.5, alpha = 0.5) + geom_line(linewidth = 0.25) + 
   geom_smooth(method="lm", se = FALSE, colour = "darkgrey", linetype = 2, linewidth = 0.5) +
-  facet_grid(id+plate~cycle) +
+  facet_grid(rows = vars(id, plate), cols = vars(cycle)) + 
+  theme(strip.text.y = element_text(angle = 0)) + 
+#  theme_bw(base_size = 10, base_family = "Calibri") +
   labs(title = "motion vs load per cycle")
+
+ggsave(here::here("data", "all_data_together.png"), 
+       all_data_plot, 
+       width = 21, height = 12, units = "cm")
+all_data_plot
 ```
 
 ## analysis
 
-To get the stiffness of each test we fit a linear model by least squares.
-This is the same as the usual "line of best fit", as shown in the plot above.
+To get the stiffness of each test, fit a linear model by least squares.
+This is the same as the usual "line of best fit", as seen in the plot above.
 
-A linear model was fit to the `position` data, using only the `distal`
+A linear model was fit to the `position` data, using only the first marker rows,
+as this result is the same for both position groups.
 
 ```{r}
 #| label: linear_model_fitting
-# fit a linear model to each cycle
-loading_models <- loading |>
-  group_by(id, arm, plate, marker, cycle) |>
-  summarise(
-    position_model = list(
-      lm(load ~ position, data = pick(everything()))
-    ),
-    motion_model = list(
-      lm(load ~ motion, data = pick(everything()))
-    )
-  )
+#| message: false
+# fit a linear model to each cycle of data,
+# one for each marker
+motion_models <- rel_motion |> 
+    summarise(
+        motion_model = list(
+            lm(load ~ motion, data = pick(everything()))
+        )
+    ) |>
+    tidyr::pivot_wider(id_cols = c(id, arm, plate, cycle), 
+                       names_from = marker, 
+                       values_from = motion_model)
 
-motion_models <- loading |>
-  group_by(id, arm, plate, marker, cycle) |>
-  summarise(
-    motion_model = list(
-      lm(load ~ motion, data = pick(everything()))
-    )
-  ) |>
-  tidyr::pivot_wider(id_cols = c(id, arm, plate, cycle), 
-                     names_from = marker, 
-                     values_from = motion_model)
-
-position_models <- loading |>
-  filter(marker == "distal") |> # It doesn't matter which in this case
-  group_by(id, arm, plate, cycle) |>
+# and one for the Instron position
+position_models <- rel_motion |> 
+  ungroup(marker) |> # Remove marker from the grouping columns
+  filter(marker == first(marker)) |>  # it doesn't matter which on in this case
   summarise(
     position = list(
       lm(load ~ position, data = pick(everything()))
@@ -505,8 +572,9 @@ stiffness <- loading_models |>
 
 ## save the calculated stiffness results
 
-Write out the calculated stifness results.
-These can be read to apply different analysis, without re-calculating from the raw data.
+Write out the calculated stiffness results.
+These can be read to apply different analysis, 
+without re-calculating from the raw data.
 
 ```{r}
 #| label: save_stiffness
@@ -523,43 +591,39 @@ stiffness |>
   aes(x=cycle, y = value, colour=plate) + 
   geom_point() + 
   facet_grid(location ~ id, scales = "free_y") +
+  theme_bw(base_size = 14, base_family = "Calibri") +
   labs(title = "stiffness per cycle", y = "stiffness (N/mm)")
 ```
+
+This can be summarised with a box plot.
+```{r}
+#| label: boxplot_liner_model_stiffness
+# Plot the stiffness per cycle as a check
+stiffness |> 
+  tidyr::pivot_longer(ends_with("estimate"), names_to = "location") |> 
+  ggplot() + 
+  aes(x=plate, y = value, colour=plate) + 
+  geom_boxplot() + 
+  facet_grid(location ~ id, scales = "free_y") +
+  theme_bw(base_size = 14, base_family = "Calibri") +
+  labs(title = "stiffness per cycle", y = "stiffness (N/mm)")
+
+```
+The box plot makes it plain that some specimens are stiffer than others,
+and it is usually, but not always, the short plate which is stiffer.
 
 ## check for effect of cycling
 
 Every test was made up of 60 cycles, with two cycles recorded every 10 - so
 cycles 9, 10, 19, 20, 29, 30, 39, 40, 49, 50, 50, 60.
 
+The repeated cycling may have loosened some samples, so check for that.
+
 To test if repeated cycling is having an effect use a repeated 
 measures ANOVA, as the cycles are repeated on the same subject for each test.
 
 ```{r}
 #| label: repeated_measures_anova
-
-# # Do independently
-# distal_effect <- stiffness |> 
-#   ungroup() |> 
-#   mutate(test = factor(paste0(id, plate)), cycle = factor(cycle)) |> # A factor for each test subject
-#   aov(formula = distal_estimate ~ cycle + Error(test))
-# broom::tidy(distal_effect) |> print()
-# 
-# proximal_effect <- stiffness |> 
-#   ungroup() |> 
-#   mutate(test = factor(paste0(id, plate)), cycle = factor(cycle)) |> # A factor for each test subject
-#   aov(formula = proximal_estimate ~ cycle + Error(test))
-# broom::tidy(proximal_effect) |> print()
-# 
-# # Explicit naming works inside summarise (across didn't seem to)
-# stiffness |>
-#   ungroup() |>
-#   mutate(test = factor(paste0(id, plate)), cycle = factor(cycle)) |>
-#   summarise(
-#     distal_effect = list(aov(formula = distal_estimate ~ cycle + Error(test)) |> broom::tidy()),
-#     proximal_effect = list(aov(formula = proximal_estimate ~ cycle + Error(test)) |> broom::tidy())
-#   ) |>
-#   tidyr::pivot_longer(cols = everything()) |>
-#   tidyr::unnest(cols = value, names_sep = "_")
 
 # Pivot longer and group to do them all together
 cycle_effect <- stiffness |>
@@ -576,58 +640,77 @@ cycle_effect <- stiffness |>
 cycle_effect
 ```
 
-Since all p.values are > 0.05, we can reject an effect of cycling 
+Since all p.values are > 0.05, we can reject an effect of cycling on stiffness.
 (the smallest p = `r min(cycle_effect$p.value, na.rm = TRUE)`).
 
+Given that, the cycles can be averaged together to reduce the variance.
+
 ```{r}
-# stiffness |> ungroup() |> mutate(test = factor(paste0(id, plate)), cycle = ordered(cycle)) |> tidyr::pivot_longer(cols = ends_with("estimate"), names_to = "measure") |> group_by(id, arm, plate, test, measure) |>  mutate(model = aov(formula = value ~ cycle + Error(test)))
-
-# position_aov <- stiffness |> ungroup() |> mutate(test = factor(paste0(id, plate)), cycle = ordered(cycle)) |> aov(formula = position_estimate ~ cycle + Error(test))
-
-# For repeats of the first plate
-stiffness |> 
-  ungroup() |> 
-  #dplyr::select(-arm) |>
-  nest_by(id, plate,marker) |>
-  mutate(model = list(aov(motion ~ cycle, data = data)),
-         summary = list(broom::tidy(model))
-  ) |>
-  tidyr::unnest(summary) |>
-  dplyr::select(-data, -model) |>
-  filter(!is.na(p.value))
-
-# Across plates
-stiffness |> 
-  ungroup() |> 
-  nest_by(plate, marker) |> 
-  mutate(model = list(aov(motion ~ cycle + Error(factor(id)), data = data)),
-         summary = list(broom::tidy(model))
-         ) |> 
-  tidyr::unnest(summary) |> 
-  dplyr::select(-data, -model) |>
-  filter(!is.na(p.value))
-
-```
-Only one result (proximal marker for long plates) was significant.
-It is not unreasonable to can conclude that the stiffness is generally not 
-changed by multiple cycles.
-This means they can be averaged to reduce the variation between cycles.
-
-Use the averaged stiffnesses in an ANOVA to look for differences due to plate type.
-```{r}
-#| label: compare_plates
-#| warning: false
+#| label: stiffness_all_cycles
 #| message: false
 
-model <- stiffness |>
-  summarise(stiffness = mean(motion), .groups = "keep") |>
-  ungroup() |>
-  aov(stiffness ~ plate+marker, data = _)
+motion_all_cycles <- rel_motion |> 
+    ungroup(cycle) |>
+    summarise(
+        motion_model = list(
+            lm(load ~ motion, data = pick(everything()))
+        )
+    ) |>
+    tidyr::pivot_wider(id_cols = c(id, arm, plate), 
+                       names_from = marker, 
+                       values_from = motion_model)
 
-summary(model)
+position_all_cycles <- rel_motion |> 
+  ungroup(marker) |> # Remove marker from the grouping columns
+  filter(marker == first(marker)) |>  # it doesn't matter which on in this case
+  ungroup(cycle) |>
+  summarise(
+    position = list(
+      lm(load ~ position, data = pick(everything()))
+    )
+  )
+
+stiffness_all_cycles <- left_join(motion_all_cycles, position_all_cycles) |>
+  group_by(id, plate) |>
+  mutate(
+    across(c(distal, proximal, position), ~ purrr::map(.x, broom::tidy), .names = "{.col}_tidy")
+    ) |>
+  tidyr::unnest(ends_with("tidy"), names_sep = "_") |>
+  filter(if_any(ends_with("term"), \(c) c != "(Intercept)")) |>
+  dplyr::select(ends_with("estimate")) |>
+  rename_with(~ stringr::str_remove(.x, "_tidy"))
+
+# Rearrange the result data into long form
+results <- stiffness_all_cycles |>
+  rename_with(~ stringr::str_remove(.x, "_estimate")) |>
+  ungroup() |>
+  tidyr::pivot_longer(cols = distal:position, names_to = "location") |>
+  mutate(location = forcats::fct(location, levels = c("proximal", "distal", "position"))) |>
+  mutate(plate = forcats::fct_recode(plate, long = "L", short = "S"))
+
 ```
 
-This shows a significant difference between the two plate designs.
+## compare plate types
+
+Test if the plate type significantly effects the averaged stiffness values.
+Check each marker separately, in case there is an effect at one fusion junction
+but not at others.
+
+```{r}
+results |> 
+  nest_by(location) |>
+  mutate(model = list(aov(formula = value ~ plate, data = data)), 
+         summary = list(broom::tidy(model))
+         ) |> 
+  tidyr::unnest(summary) |>
+  select(-data, -model)
+```
+None of the tests are significant.
+
+That is, the plate type does not have a significant effect on the stiffness
+at either of the fusion sites (proximal & distal), 
+or on the overall fusion (position).
+
 The box plot shows this graphically.
 
 ```{r}
@@ -637,23 +720,77 @@ The box plot shows this graphically.
 
 # Compare average stiffness between plates
 
-# This is for insertion into Matt's presentation, so want to use the font 
-# Calibri, like the rest of the slides. These need to be installed previously.
-
-extrafont::loadfonts() # makes other fonts available to R
-
-plot_box <- loading |>
-    mutate(stiffness = mean(motion)) |>
-    ggplot() + 
-    aes(y = motion, x = plate) +
-    geom_boxplot() +
-    theme_bw(base_size = 14, base_family = "Calibri") +
-    facet_grid(.~marker)
-    #labs(title = "plate stiffness")
+plot_box <- results |>
+  ggplot() + 
+  aes(x = plate, y = value, colour = plate) + 
+  geom_boxplot() + 
+  facet_grid(cols = vars(location))+
+  theme_bw(base_size = 14, base_family = "Calibri") +
+  labs(title = "plate stiffness by location", y = "stiffness (N/mm)") +
+  guides(colour = "none")
 print(plot_box)
 
 ggsave(filename = here::here("data", "stiffness_between_plates.png"), 
        plot = plot_box, 
        width = 21, height = 12, units = "cm")
+```
+
+## equivalence testing
+
+Having established that the plates are not different, are they the same?
+This is examined with equivalence testing, using a two-one-sided-t-test (TOST).
+The TOST procedure effectively tests if the mean is significantly larger than a
+specified lower bound, and simultaneously significantly smaller than a specified 
+upper bound.
+If both statements are true then we can be confident that the actual value is 
+between  the specified bounds.
+
+
+```{r}
+#| label: TOST_testing
+
+library(TOSTER)
+
+tidy_tost <- function(tost) {
+    as_tibble(tost$TOST, rownames = "test")
+}
+
+tidy_tost_p <- function(tost) {
+  as_tibble(tost$TOST, rownames = "test") |>
+    select(-t, -SE, -df) |>
+    tidyr::pivot_wider(values_from = p.value, names_from = test)
+}
+
+results |>
+  tidyr::pivot_wider(names_from = plate, values_from = value) |>
+  group_nest(location) |>
+  mutate(
+    res = purrr::map(data,
+                     ~ t_TOST(.x$long, .x$short, paired = TRUE, eqb = 10) |>
+                       tidy_tost()
+                     )
+    ) |>
+  tidyr::unnest(res) |>
+  select(-data)
+
+# Or, equivalently
+results |> 
+  tidyr::pivot_wider(names_from = plate, values_from = value) |> 
+  group_by(location) |> 
+  group_modify(~ t_TOST(.x$long, .x$short, paired = TRUE, eqb = 10) |> tidy_tost())
+
+# Arbitrarily choose 10% of the group mean value as the smallest effect size of interest (SESOI)
+eqb_percent = (5 / 100)
+eqb_list <- results |> 
+    summarise(eqb = mean(value) * eqb_percent, .by = location) |> tibble::deframe()
+
+# Or, perhaps even better
+results |> 
+  group_by(location) |> 
+  group_modify(
+   ~ t_TOST(value ~ plate, data = .x, hypothesis = "EQU", paired = TRUE, eqb = eqb_list[.y$location]) |> 
+      tidy_tost_p()
+  ) |> bind_cols(eqb = eqb_list)
+
 ```
 

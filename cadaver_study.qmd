@@ -19,6 +19,7 @@ Load any needed libraries and define some constants.
 
 library(dplyr) # for manipulating dataframes
 library(ggplot2) # for plotting
+library(stringr) # string operations
 
 #library(segmented) # for segmented fits
 
@@ -54,14 +55,14 @@ raw_files = list.files(path = data_root,
                        )
 #  # Use a case insensitive match in case of (known) spelling errors
 # raw_files <- raw_files |>
-#   stringr::str_subset(pattern = "(?i)Marker_Data")
+#   str_subset(pattern = "(?i)Marker_Data")
 
 # Naming convention not followed in last set of extraction, 
 # so loosen the acceptance criteria.
 # Unfortunately some trial tests hae "marker" in the path, 
 # so only test the basename, which is stored in the list names()
 names(raw_files) <- basename(raw_files)
-keep <- names(raw_files) |>  stringr::str_subset(pattern = "(?i)Marker")
+keep <- names(raw_files) |>  str_subset(pattern = "(?i)Marker")
 raw_files <- raw_files[keep]
 
 # Some tests were analysed without removing rigid motion of the radius marker,
@@ -69,7 +70,7 @@ raw_files <- raw_files[keep]
 # Remove these from the list of files to analyse.
 
 raw_files <- raw_files |>
-  stringr::str_subset(pattern = "(?i)MOTION|Radius", negate = TRUE)
+  str_subset(pattern = "(?i)MOTION|Radius", negate = TRUE)
 
 # Name the vector with the filename, which bind_rows will turn into a column
 names(raw_files) <- basename(raw_files)
@@ -81,14 +82,14 @@ all_results <- raw_files |>
   bind_rows(.id = "filename") |>
   # clean up and simplify names
   rename(frame = "File Number", time = "Time_1") |>
-  rename_with(~ stringr::str_remove(.x, "\\s*\\[.+\\]") |> stringr::str_to_lower()) |>
+  rename_with(~ str_remove(.x, "\\s*\\[.+\\]") |> str_to_lower()) |>
   dplyr::select(-"time_0") |> # Don;t need two time columns
   # fix the spelling of parts of the filename
   # First fix a known typo
-  mutate(filename = stringr::str_replace(filename, "(?i)poximal", "proximal")) |>
+  mutate(filename = str_replace(filename, "(?i)poximal", "proximal")) |>
   # Then make the marker labels all lower case
-  mutate(filename = stringr::str_replace(filename, "(?i)distal", "distal")) |>
-  mutate(filename = stringr::str_replace(filename, "(?i)proximal", "proximal"))
+  mutate(filename = str_replace(filename, "(?i)distal", "distal")) |>
+  mutate(filename = str_replace(filename, "(?i)proximal", "proximal"))
 ```
 
 ```{r}
@@ -321,7 +322,7 @@ Plot the relative position and time for each cycle, to make the trends easier to
 ```{r}
 #| label: check_MSD664
 loading |> 
-  filter(stringr::str_detect(filename, "(?i)664" ), 
+  filter(str_detect(filename, "(?i)664" ), 
          marker == "distal", time < 800) |> 
   mutate(dt = time - first(time), ds = position - first(position)) |> 
   ggplot() + 
@@ -367,7 +368,7 @@ What about the shape of the load ~ position curve?
 #| label: MSD664_load_poition
 
 loading |> 
-    filter(stringr::str_detect(filename, "(?i)664" ), 
+    filter(str_detect(filename, "(?i)664" ), 
            marker == "distal") |> 
     mutate(dt = time - first(time), ds = position - first(position)) |> 
     ggplot() + 
@@ -567,7 +568,7 @@ stiffness <- loading_models |>
   tidyr::unnest(ends_with("tidy"), names_sep = "_") |>
   filter(if_any(ends_with("term"), \(c) c != "(Intercept)")) |>
   dplyr::select(ends_with("estimate")) |>
-  rename_with(~ stringr::str_remove(.x, "_tidy"))
+  rename_with(~ str_remove(.x, "_tidy"))
 ```
 
 ## save the calculated stiffness results
@@ -601,6 +602,10 @@ This can be summarised with a box plot.
 # Plot the stiffness per cycle as a check
 stiffness |> 
   tidyr::pivot_longer(ends_with("estimate"), names_to = "location") |> 
+      mutate(location = ordered(str_remove(location, "_estimate"), 
+                                levels = c("proximal", "distal", "position")
+                                )
+             ) |>
   ggplot() + 
   aes(x=plate, y = value, colour=plate) + 
   geom_boxplot() + 
@@ -609,7 +614,7 @@ stiffness |>
   labs(title = "stiffness per cycle", y = "stiffness (N/mm)")
 
 ```
-The box plot makes it plain that some specimens are stiffer than others,
+The plots make it plain that some specimens are stiffer than others,
 and it is usually, but not always, the short plate which is stiffer.
 
 ## check for effect of cycling
@@ -617,7 +622,8 @@ and it is usually, but not always, the short plate which is stiffer.
 Every test was made up of 60 cycles, with two cycles recorded every 10 - so
 cycles 9, 10, 19, 20, 29, 30, 39, 40, 49, 50, 50, 60.
 
-The repeated cycling may have loosened some samples, so check for that.
+The repeated cycling may have an effect on the stiffness (e.g. by loosening
+the screws), so check for that.
 
 To test if repeated cycling is having an effect use a repeated 
 measures ANOVA, as the cycles are repeated on the same subject for each test.
@@ -627,7 +633,7 @@ measures ANOVA, as the cycles are repeated on the same subject for each test.
 
 # Pivot longer and group to do them all together
 cycle_effect <- stiffness |>
-  rename_with(~ stringr::str_remove_all(.x, "_.+")) |> # don't need the complication
+  rename_with(~ str_remove_all(.x, "_.+")) |> # don't need the complication
   ungroup() |>
   mutate(test = factor(paste0(id, plate)), cycle = factor(cycle)) |>
   tidyr::pivot_longer(cols = c(distal, proximal), names_to = "measure") |>
@@ -641,9 +647,9 @@ cycle_effect
 ```
 
 Since all p.values are > 0.05, we can reject an effect of cycling on stiffness.
-(the smallest p = `r min(cycle_effect$p.value, na.rm = TRUE)`).
+(the smallest p is `r min(cycle_effect$p.value, na.rm = TRUE)`).
 
-Given that, the cycles can be averaged together to reduce the variance.
+Given that, the cycles can be averaged together to reduce the variability.
 
 ```{r}
 #| label: stiffness_all_cycles
@@ -678,22 +684,47 @@ stiffness_all_cycles <- left_join(motion_all_cycles, position_all_cycles) |>
   tidyr::unnest(ends_with("tidy"), names_sep = "_") |>
   filter(if_any(ends_with("term"), \(c) c != "(Intercept)")) |>
   dplyr::select(ends_with("estimate")) |>
-  rename_with(~ stringr::str_remove(.x, "_tidy"))
+  rename_with(~ str_remove(.x, "_tidy"))
 
 # Rearrange the result data into long form
 results <- stiffness_all_cycles |>
-  rename_with(~ stringr::str_remove(.x, "_estimate")) |>
+  rename_with(~ str_remove(.x, "_estimate")) |>
   ungroup() |>
   tidyr::pivot_longer(cols = distal:position, names_to = "location") |>
   mutate(location = forcats::fct(location, levels = c("proximal", "distal", "position"))) |>
   mutate(plate = forcats::fct_recode(plate, long = "L", short = "S"))
 
+# Plot to show the averaged stiffness results per plate & arm
+results |> ggplot() + 
+    aes(x=plate, y = value, colour=plate) + 
+    geom_boxplot() + 
+    facet_grid(location ~ id, scales = "free_y") +
+    theme_bw(base_size = 14, base_family = "Calibri") +
+    labs(title = "stiffness per cycle", y = "stiffness (N/mm)")
+```
+
+The results are very similar when taking all cycles together.
+At the proximal and distal fusion sites the short plate is stiffer 
+than the long plate for _most_ tests, but not all.
+
+The long plate is stiffer overall (i.e. measured at the loading point), 
+again for _most_ but not all specimens.
+
+```{r}
+#| label: which_is_stiffer
+
+results |> 
+  tidyr::pivot_wider(values_from = value, names_from = plate) |>
+  group_by(location) |> 
+  mutate(stiffer = if_else(long > short, "long stiffer", "short stiffer")) |> 
+  count(stiffer) |> 
+  tidyr::pivot_wider(names_from = stiffer, values_from = n)
 ```
 
 ## compare plate types
 
-Test if the plate type significantly effects the averaged stiffness values.
-Check each marker separately, in case there is an effect at one fusion junction
+Test if the plate type significantly effects the stiffness.
+Check each marker separately, in case there is an effect at one location
 but not at others.
 
 ```{r}
@@ -724,7 +755,7 @@ plot_box <- results |>
   ggplot() + 
   aes(x = plate, y = value, colour = plate) + 
   geom_boxplot() + 
-  facet_grid(cols = vars(location))+
+  facet_grid(cols = vars(location)) +
   theme_bw(base_size = 14, base_family = "Calibri") +
   labs(title = "plate stiffness by location", y = "stiffness (N/mm)") +
   guides(colour = "none")
@@ -735,62 +766,163 @@ ggsave(filename = here::here("data", "stiffness_between_plates.png"),
        width = 21, height = 12, units = "cm")
 ```
 
+At the proximal junction the short plates were stiffer than the long plates, 
+although the difference was not significant, due to the large variation in the
+short plate stiffness at this junction.
+
+At the distal junction the long plates were slightly stiffer, but this was still
+not significant, even with the smaller variation of the short plates.
+
+The overall stiffness as measured from the testing machine was much less 
+variable for both plates, and the short plate was slightly stiffer than.
+The difference was very small, so not significant even with the 
+reduced variability.
+
 ## equivalence testing
 
 Having established that the plates are not different, are they the same?
-This is examined with equivalence testing, using a two-one-sided-t-test (TOST).
+This was examined with equivalence testing, using a two-one-sided-t-test (TOST).
 The TOST procedure effectively tests if the mean is significantly larger than a
 specified lower bound, and simultaneously significantly smaller than a specified 
 upper bound.
 If both statements are true then we can be confident that the actual value is 
-between  the specified bounds.
+between the specified bounds.
 
+```{r}
+#| label: TOST_setup
+
+# Arbitrarily choose 10% of the group mean value as the smallest effect size of interest (SESOI)
+eqb_percent = (10 / 100)
+# As the means differ by location, find 10% of each & make a list by location
+eqb_list <- results |> 
+    summarise(eqb = mean(value) * eqb_percent, .by = location) |> 
+  tibble::deframe()
+
+eqb_print = scales::label_percent()(eqb_percent) # format for display
+
+```
+
+Test if the two plates differed by less than `r eqb_print`. 
 
 ```{r}
 #| label: TOST_testing
 
 library(TOSTER)
 
+# Choices for formatting the output of TOST
 tidy_tost <- function(tost) {
     as_tibble(tost$TOST, rownames = "test")
 }
-
 tidy_tost_p <- function(tost) {
   as_tibble(tost$TOST, rownames = "test") |>
     select(-t, -SE, -df) |>
     tidyr::pivot_wider(values_from = p.value, names_from = test)
 }
 
-results |>
-  tidyr::pivot_wider(names_from = plate, values_from = value) |>
-  group_nest(location) |>
-  mutate(
-    res = purrr::map(data,
-                     ~ t_TOST(.x$long, .x$short, paired = TRUE, eqb = 10) |>
-                       tidy_tost()
-                     )
-    ) |>
-  tidyr::unnest(res) |>
-  select(-data)
+# These options only use one equivalence bound for all locations - not accurate.
+# results |>
+#   tidyr::pivot_wider(names_from = plate, values_from = value) |>
+#   group_nest(location) |>
+#   mutate(
+#     res = purrr::map(data,
+#                      ~ TOSTER::t_TOST(.x$long, .x$short, paired = TRUE, eqb = 10) |>
+#                        tidy_tost()
+#                      )
+#     ) |>
+#   tidyr::unnest(res) |>
+#   select(-data)
+# 
+# # Or, equivalently
+# results |> 
+#   tidyr::pivot_wider(names_from = plate, values_from = value) |> 
+#   group_by(location) |> 
+#   group_modify(
+#     ~ TOSTER::t_TOST(.x$long, .x$short, paired = TRUE, eqb = 10) |> tidy_tost()
+#   )
 
-# Or, equivalently
-results |> 
-  tidyr::pivot_wider(names_from = plate, values_from = value) |> 
-  group_by(location) |> 
-  group_modify(~ t_TOST(.x$long, .x$short, paired = TRUE, eqb = 10) |> tidy_tost())
-
-# Arbitrarily choose 10% of the group mean value as the smallest effect size of interest (SESOI)
-eqb_percent = (5 / 100)
-eqb_list <- results |> 
-    summarise(eqb = mean(value) * eqb_percent, .by = location) |> tibble::deframe()
-
-# Or, perhaps even better
+# Apply a different equivalcnce bound per position.
 results |> 
   group_by(location) |> 
   group_modify(
-   ~ t_TOST(value ~ plate, data = .x, hypothesis = "EQU", paired = TRUE, eqb = eqb_list[.y$location]) |> 
+   ~ TOSTER::t_TOST(value ~ plate, data = .x, hypothesis = "EQU", paired = TRUE, eqb = eqb_list[.y$location]) |> 
       tidy_tost_p()
-  ) |> bind_cols(eqb = eqb_list)
+  ) |> bind_cols(equivalence_bounds = eqb_list)
 
 ```
 
+None of the tests achieved significance, as both the upper and lower test must
+be significant to determine that the difference is between the bounds.
+
+Given the large variation in results, it is likely that many specimens would be 
+needed to make a determination of equivalence.
+A power test shows this to be the case.
+
+```{r}
+# power_t_TOST(
+#   n = NULL,
+#   delta = 0,
+#   sd = 1,
+#   eqb,
+#   low_eqbound = NULL,
+#   high_eqbound = NULL,
+#   alpha = NULL,
+#   power = NULL,
+#   type = "two.sample"
+# )
+
+# Set up a table of parameters per location to feed to power_t_TOST
+# First get tthe paired data into parallel columns, then extract the parameters
+params <- results |> 
+  tidyr::pivot_wider(names_from = plate) |> 
+  group_by(location) |> 
+  summarise(
+    n = n(),
+    delta = 0, 
+    sd = sd(long - short), # Standard deviation of the differences for paired samples.
+    eqb = eqb_list[cur_group()$location], # Chosen previously
+    alpha = .05, 
+    power = 0.8,
+    type = "paired",
+      
+    .groups = "keep"
+  )
+
+params |> 
+    group_modify(~ TOSTER::power_t_TOST(delta = 0, 
+                                     sd = .x$sd, 
+                                     eqb = .x$eqb, 
+                                     alpha = .x$alpha, 
+                                     power = .x$power, 
+                                     type = .x$type) |> broom::tidy()
+    ) 
+# n	
+# number of observations per group. 2 sample sizes, in a vector, can be provided for the two sample case.
+# 
+# delta	
+# true difference in means (default is 0).
+# 
+# sd	
+# population standard deviation. Standard deviation of the differences for paired samples.
+# 
+# eqb	
+# Equivalence bound. Can provide 1 value (negative value is taken as the lower bound) or 2 specific values that represent the upper and lower equivalence bounds.
+# 
+# low_eqbound	
+# Lower equivalence bounds. Deprecated use eqb.
+# 
+# high_eqbound	
+# Upper equivalence bounds. Deprecated use eqb.
+# 
+# alpha	
+# a priori alpha-level (i.e., significance level).
+# 
+# power	
+# power of the TOST procedure (1-beta).
+# 
+# type	
+# string specifying the type of t-test.
+```
+
+Given the large number of specimens required at even a `r eqb_print` difference
+it is reasonable to conclude that inter-specimen (or patient) differences are
+greater than any inherent difference between plates.

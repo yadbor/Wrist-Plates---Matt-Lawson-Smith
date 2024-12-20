@@ -728,15 +728,17 @@ Check each marker separately, in case there is an effect at one location
 but not at others.
 
 ```{r}
-results |> 
+anova_results <- results |> 
   nest_by(location) |>
   mutate(model = list(aov(formula = value ~ plate, data = data)), 
          summary = list(broom::tidy(model))
          ) |> 
   tidyr::unnest(summary) |>
   select(-data, -model)
+
+anova_results |> filter(!is.na(p.value))
 ```
-None of the tests are significant.
+None of the tests are significant, as all `p.value`s are > 0.05.
 
 That is, the plate type does not have a significant effect on the stiffness
 at either of the fusion sites (proximal & distal), 
@@ -777,6 +779,35 @@ The overall stiffness as measured from the testing machine was much less
 variable for both plates, and the short plate was slightly stiffer than.
 The difference was very small, so not significant even with the 
 reduced variability.
+
+Check if the study had adequate power.
+
+```{r}
+
+anova_results |> 
+  select(location, term, df, meansq) |> 
+  tidyr::pivot_wider(names_from = term, values_from = c(df, meansq)) |> 
+  summarise(groups = 1 + df_plate, 
+            n = 1 + (df_Residuals / groups), 
+            b.var = meansq_Residuals, 
+            w.var = meansq_plate, 
+            sig.level = 0.05, 
+            power = 0.8) |> 
+  group_by(location) |>
+  summarise(
+    n_in_test = n,
+    n_required = power.anova.test(groups=groups, 
+                                  between.var=b.var, 
+                                  within.var=w.var, 
+                                  sig.level=sig.level, 
+                                  power=power)$n
+    )
+
+```
+
+The number of specimens was enough to determine a difference for the position
+and distal locations, but not the proximal location, 
+due to the greater variation in those results.
 
 ## equivalence testing
 

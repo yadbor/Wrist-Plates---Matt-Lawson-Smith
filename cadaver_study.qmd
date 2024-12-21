@@ -103,7 +103,11 @@ all_results <- all_results |>
                                            marker = "(?i)distal|proximal", ".*"),
                                 cols_remove = FALSE,
                                 #too_few = "debug"
-    ) 
+    )
+
+# Make nicer plate labels (but may be too long when plotting later?)
+all_results <- all_results |>
+  mutate(plate = case_match(plate, "L" ~ "long", "S" ~ "short"))
 ```
 
 Check that the filenames have parsed to something sensible
@@ -649,7 +653,7 @@ cycle_effect
 Since all p.values are > 0.05, we can reject an effect of cycling on stiffness.
 (the smallest p is `r min(cycle_effect$p.value, na.rm = TRUE)`).
 
-Given that, the cycles can be averaged together to reduce the variability.
+Given that, the cycles can be considered together to reduce the variability.
 
 ```{r}
 #| label: stiffness_all_cycles
@@ -691,7 +695,7 @@ results <- stiffness_all_cycles |>
   rename_with(~ str_remove(.x, "_estimate")) |>
   ungroup() |>
   tidyr::pivot_longer(cols = distal:position, names_to = "location") |>
-  mutate(location = forcats::fct(location, levels = c("proximal", "distal", "position"))) |>
+  mutate(location = ordered(location, levels = c("proximal", "distal", "position"))) |>
   mutate(plate = forcats::fct_recode(plate, long = "L", short = "S"))
 
 # Plot to show the averaged stiffness results per plate & arm
@@ -735,6 +739,23 @@ anova_results <- results |>
          ) |> 
   tidyr::unnest(summary) |>
   select(-data, -model)
+
+t_results <- results |> 
+    nest_by(location) |>
+    mutate(model = list(t.test(formula = value ~ plate, data = data)), 
+           summary = list(broom::tidy(model))
+    ) |> 
+    tidyr::unnest(summary) |>
+    select(-data, -model)
+
+# But should be paired...
+t_results <- results |> 
+    nest_by(location) |>
+    mutate(model = list(pairwise.t.test(x = data$value, g = data$plate, paired = TRUE)), 
+           summary = list(broom::tidy(model))
+    ) |> 
+    tidyr::unnest(summary) |>
+    select(-data, -model)
 
 anova_results |> filter(!is.na(p.value))
 ```

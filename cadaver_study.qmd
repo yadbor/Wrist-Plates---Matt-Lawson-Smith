@@ -176,6 +176,7 @@ Plotting just the first test shows this problem,
 but it is present to a greater or lesser extent in all the tests.
 
 ```{r}
+#| label: plot_raw_labelled_cycles
 cycles |> 
   ungroup() |> 
   filter(filename == first(filename)) |> 
@@ -253,6 +254,7 @@ The test geometry always puts the proximal marker to the right,
 so the proximal X coordinate will be greater than the distal X coordinate.
 
 ```{r}
+#| label: check_marker_positions
 #| message: FALSE
 cycles |> 
   filter(cycle == 1) |> # X, Y, Z are determined by the first frame
@@ -400,6 +402,8 @@ specimen on any part of the rig.
 If there had been contact then the change in slope would have been much sharper.
 
 ```{r}
+#| label: plot_aligned_data
+#| 
 loading |> 
     filter(marker == "distal") |> 
     mutate(dt = time - first(time), ds = position - first(position)) |> 
@@ -734,6 +738,8 @@ Check each marker separately, in case there is an effect at one location
 but not at others.
 
 ```{r}
+#| label: paired_t-test
+#| 
 # Using a "paired" ANOVA
 anova_results <- results |> 
   nest_by(location) |>
@@ -751,11 +757,6 @@ anova_paired <- results |>
   tidyr::unnest(summary) |>
   select(-data, -model)
 
-<<<<<<< HEAD
-=======
-#aov(Measured.Value ~ Time + Error(Subject/Time), data = my.data)
-
->>>>>>> 127f36aa22b30317f3f50a19dad0008edfcd1ac9
 t_results <- results |> 
     nest_by(location) |>
     mutate(model = list(t.test(formula = value ~ plate, data = data)), 
@@ -765,11 +766,8 @@ t_results <- results |>
     select(-data, -model)
 
 # But should be a paired t-test...
-<<<<<<< HEAD
 # The formula interface to t.test() doesn't work with paired = TRUE, 
 # and it's easier to use pairwise.t.test() anyway...
-=======
->>>>>>> 127f36aa22b30317f3f50a19dad0008edfcd1ac9
 t_results <- results |> 
     nest_by(location) |>
     mutate(model = list(pairwise.t.test(x = data$value, g = data$plate, paired = TRUE)), 
@@ -824,6 +822,7 @@ reduced variability.
 Check if the study had adequate power.
 
 ```{r}
+#| label: power_t-test
 # Power os a paired t.test
 results |>
   mutate(location = ordered(location, levels = c("proximal", "distal", "position"))) |>
@@ -913,6 +912,7 @@ would be needed to make a determination of equivalence.
 A _post-hoc_ power test shows this to be the case.
 
 ```{r}
+#| label: power_TOST
 # power_t_TOST(
 #   n = NULL,
 #   delta = 0,

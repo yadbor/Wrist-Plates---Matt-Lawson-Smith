@@ -839,7 +839,7 @@ results |>
       alternative = "two.sided"
     )
   } |> broom::tidy())) |>
-  unnest(t_test) |>
+  tidyr::unnest(t_test) |>
   arrange(location)
 ```
 

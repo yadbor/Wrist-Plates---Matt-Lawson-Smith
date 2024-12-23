@@ -727,11 +727,14 @@ results |>
 
 ## compare plate types
 
-Test if the plate type significantly effects the stiffness.
+Test if the plate type significantly effects the stiffness, using a paired
+t-test as the arms were paired.
+This is the strongest statistical test for these data.
 Check each marker separately, in case there is an effect at one location
 but not at others.
 
 ```{r}
+# Using a "paired" ANOVA
 anova_results <- results |> 
   nest_by(location) |>
   mutate(model = list(aov(formula = value ~ plate, data = data)), 
@@ -739,6 +742,16 @@ anova_results <- results |>
          ) |> 
   tidyr::unnest(summary) |>
   select(-data, -model)
+
+anova_paired <- results |> 
+  nest_by(location) |>
+  mutate(model = list(aov(formula = value ~ plate + Error(id/plate), data = data)), 
+         summary = list(broom::tidy(model))
+         ) |> 
+  tidyr::unnest(summary) |>
+  select(-data, -model)
+
+#aov(Measured.Value ~ Time + Error(Subject/Time), data = my.data)
 
 t_results <- results |> 
     nest_by(location) |>
@@ -748,7 +761,7 @@ t_results <- results |>
     tidyr::unnest(summary) |>
     select(-data, -model)
 
-# But should be paired...
+# But should be a paired t-test...
 t_results <- results |> 
     nest_by(location) |>
     mutate(model = list(pairwise.t.test(x = data$value, g = data$plate, paired = TRUE)), 
@@ -757,7 +770,6 @@ t_results <- results |>
     tidyr::unnest(summary) |>
     select(-data, -model)
 
-anova_results |> filter(!is.na(p.value))
 ```
 None of the tests are significant, as all `p.value`s are > 0.05.
 
@@ -804,31 +816,33 @@ reduced variability.
 Check if the study had adequate power.
 
 ```{r}
-
-anova_results |> 
-  select(location, term, df, meansq) |> 
-  tidyr::pivot_wider(names_from = term, values_from = c(df, meansq)) |> 
-  summarise(groups = 1 + df_plate, 
-            n = 1 + (df_Residuals / groups), 
-            b.var = meansq_Residuals, 
-            w.var = meansq_plate, 
-            sig.level = 0.05, 
-            power = 0.8) |> 
-  group_by(location) |>
-  summarise(
-    n_in_test = n,
-    n_required = power.anova.test(groups=groups, 
-                                  between.var=b.var, 
-                                  within.var=w.var, 
-                                  sig.level=sig.level, 
-                                  power=power)$n
+# Power os a paired t.test
+results |>
+  mutate(location = ordered(location, levels = c("proximal", "distal", "position"))) |>
+  pivot_wider(names_from = plate, values_from = value) |>
+  nest(.by = location) |>
+  mutate(t_test = map(data, ~ {
+    delta = .x$short - .x$long;
+    power.t.test(
+      delta = mean(delta),
+      sd = sd(delta),
+      sig.level = 0.05,
+      power = 0.8,
+      type = "paired",
+      alternative = "two.sided"
     )
-
+  } |> broom::tidy())) |>
+  unnest(t_test) |>
+  arrange(location)
 ```
 
-The number of specimens was enough to determine a difference for the position
-and distal locations, but not the proximal location, 
-due to the greater variation in those results.
+Given the large number of specimens required to demonstrate statistical 
+significance for the observed diffence between the plates it would be 
+reasonable to conclude that inter-specimen (or patient) differences are greater 
+than any inherent difference between plates.
+
+This is not surprising, as for some tests the short plate was stiffer while for
+other tests the long plate was stiffer.
 
 ## equivalence testing
 
@@ -854,7 +868,7 @@ eqb_print = scales::label_percent()(eqb_percent) # format for display
 
 ```
 
-Test if the two plates differed by less than `r eqb_print`. 
+Test if the two plates differed by less than ± `r eqb_print`. 
 
 ```{r}
 #| label: TOST_testing
@@ -904,10 +918,12 @@ results |>
 
 None of the tests achieved significance, as both the upper and lower test must
 be significant to determine that the difference is between the bounds.
+Therefore we cannot conclude that the difference between plates is less than the
+chosen ± `r eqb_print`.
 
-Given the large variation in results, it is likely that many specimens would be 
-needed to make a determination of equivalence.
-A power test shows this to be the case.
+Given the large variation in the results, it is likely that many specimens 
+would be needed to make a determination of equivalence.
+A _post-hoc_ power test shows this to be the case.
 
 ```{r}
 # power_t_TOST(
@@ -975,6 +991,7 @@ params |>
 # string specifying the type of t-test.
 ```
 
-Given the large number of specimens required at even a `r eqb_print` difference
-it is reasonable to conclude that inter-specimen (or patient) differences are
-greater than any inherent difference between plates.
+Given the large number of specimens required to demonstrate that the plates 
+were less than ± `r eqb_print` different it is reasonable to conclude that 
+inter-specimen (or patient) differences are greater than any inherent difference 
+between plates.

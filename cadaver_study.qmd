@@ -824,21 +824,20 @@ Check if the study had adequate power.
 ```{r}
 #| label: power_t-test
 # Power os a paired t.test
-results |>
+results |>  
   mutate(location = ordered(location, levels = c("proximal", "distal", "position"))) |>
-  pivot_wider(names_from = plate, values_from = value) |>
-  nest_by(location) |>
-  mutate(t_test = map(data, ~ {
-    delta = .x$short - .x$long;
-    power.t.test(
-      delta = mean(delta),
-      sd = sd(delta),
-      sig.level = 0.05,
-      power = 0.8,
-      type = "paired",
-      alternative = "two.sided"
-    )
-  } |> broom::tidy())) |>
+  tidyr::pivot_wider(names_from = plate, values_from = value) |> 
+  tidyr::nest(.by = location) |> 
+  mutate(t_test = purrr::map(data, 
+                      ~ {delta = .x$short -.x$long; 
+                         power.t.test(delta = mean(delta), 
+                                      sd = sd(delta), 
+                                      sig.level = 0.05, 
+                                      power = 0.8, 
+                                      type = "paired", 
+                                      alternative = "two.sided")
+                        } |> broom::tidy())
+         ) |> 
   tidyr::unnest(t_test) |>
   arrange(location)
 ```

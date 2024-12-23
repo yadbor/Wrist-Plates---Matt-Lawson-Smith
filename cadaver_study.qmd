@@ -827,7 +827,7 @@ Check if the study had adequate power.
 results |>
   mutate(location = ordered(location, levels = c("proximal", "distal", "position"))) |>
   pivot_wider(names_from = plate, values_from = value) |>
-  nest(.by = location) |>
+  nest_by(location) |>
   mutate(t_test = map(data, ~ {
     delta = .x$short - .x$long;
     power.t.test(

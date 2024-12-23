@@ -751,8 +751,6 @@ anova_paired <- results |>
   tidyr::unnest(summary) |>
   select(-data, -model)
 
-#aov(Measured.Value ~ Time + Error(Subject/Time), data = my.data)
-
 t_results <- results |> 
     nest_by(location) |>
     mutate(model = list(t.test(formula = value ~ plate, data = data)), 
@@ -762,6 +760,8 @@ t_results <- results |>
     select(-data, -model)
 
 # But should be a paired t-test...
+# The formula interface to t.test() doesn't work with paired = TRUE, 
+# and it's easier to use pairwise.t.test() anyway...
 t_results <- results |> 
     nest_by(location) |>
     mutate(model = list(pairwise.t.test(x = data$value, g = data$plate, paired = TRUE)), 
@@ -885,28 +885,7 @@ tidy_tost_p <- function(tost) {
     tidyr::pivot_wider(values_from = p.value, names_from = test)
 }
 
-# These options only use one equivalence bound for all locations - not accurate.
-# results |>
-#   tidyr::pivot_wider(names_from = plate, values_from = value) |>
-#   group_nest(location) |>
-#   mutate(
-#     res = purrr::map(data,
-#                      ~ TOSTER::t_TOST(.x$long, .x$short, paired = TRUE, eqb = 10) |>
-#                        tidy_tost()
-#                      )
-#     ) |>
-#   tidyr::unnest(res) |>
-#   select(-data)
-# 
-# # Or, equivalently
-# results |> 
-#   tidyr::pivot_wider(names_from = plate, values_from = value) |> 
-#   group_by(location) |> 
-#   group_modify(
-#     ~ TOSTER::t_TOST(.x$long, .x$short, paired = TRUE, eqb = 10) |> tidy_tost()
-#   )
-
-# Apply a different equivalcnce bound per position.
+# Apply a different equivalecnce bound per position.
 results |> 
   group_by(location) |> 
   group_modify(

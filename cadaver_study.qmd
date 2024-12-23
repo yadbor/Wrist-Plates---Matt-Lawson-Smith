@@ -840,6 +840,26 @@ results |>
          ) |> 
   tidyr::unnest(t_test) |>
   arrange(location)
+
+# Alternative code using nest_by()
+# 
+# results |>  
+#   mutate(location = ordered(location, levels = c("proximal", "distal", "position"))) |>
+#   tidyr::pivot_wider(names_from = plate, values_from = value) |> 
+#   nest_by(location) |> 
+#     mutate(delta = list(data$short - data$long), 
+#            t_test = list(power.t.test(delta = mean(delta), 
+#                                       sd = sd(delta), 
+#                                       sig.level = 0.05, 
+#                                       power = 0.8, 
+#                                       type = "paired", 
+#                                       alternative = "two.sided") |> 
+#                            broom::tidy()
+#                          )
+#            ) |> 
+#   select(-delta, -data) |> # Otherwisw get a dupliate column in power.t.test output
+#   tidyr::unnest(t_test)
+
 ```
 
 Given the large number of specimens required to demonstrate statistical 

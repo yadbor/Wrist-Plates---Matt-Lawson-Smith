@@ -118,3 +118,105 @@ results |>
       as_htest() |> broom::tidy()
   ) |> bind_cols(eqb = eqb_list)
 
+# Compare results table to estimate +/- eqb
+results |> 
+group_by(location) |> 
+  group_modify(
+    ~ TOSTER::t_TOST(value ~ plate, data = .x, hypothesis = "EQU", paired = TRUE, eqb = eqb_list[.y$location]) |> 
+      TOSTER::as_htest() |> broom::tidy()
+  )
+# # A tibble: 3 × 9
+# # Groups:   location [3]
+# location estimate statistic p.value parameter conf.low conf.high method        alternative
+# <fct>       <dbl>     <dbl>   <dbl>     <dbl>    <dbl>     <dbl> <chr>         <chr>      
+# 1 proximal   -35.2     -1.30    0.884         8   -82.1      11.7  Paired t-test equivalence
+# 2 distal     -10.7     -0.740   0.760         8   -28.2       6.74 Paired t-test equivalence
+# 3 position    -1.10    -0.302   0.615         8    -4.52      2.33 Paired t-test equivalence
+
+estimates <- results |> 
+  group_by(location) |> 
+  group_modify(
+    ~ TOSTER::t_TOST(value ~ plate, data = .x, hypothesis = "EQU", paired = TRUE, eqb = eqb_list[.y$location]) |> 
+      TOSTER::as_htest() |> broom::tidy()
+  ) |> select(estimate)
+
+left_join(estimates, eqb_list |> tibble::enframe(name = "location")) |> 
+  mutate(lo = estimate - value, hi = estimate + value)
+
+# Doesn't; give th econfidence intervals
+# # A tibble: 3 × 5
+# # Groups:   location [3]
+# location estimate value     lo      hi
+# <chr>       <dbl> <dbl>  <dbl>   <dbl>
+# 1 proximal   -35.2  3.77  -39.0  -31.4  
+# 2 distal     -10.7  2.52  -13.2   -8.20 
+# 3 position    -1.10 0.541  -1.64  -0.557
+# 
+# 
+
+
+# Paired t-test
+results |> 
+  nest_by(location) |>
+  mutate(model = list(t.test(formula = Pair(value, plate) ~ 1, data = data)), 
+        summary = list(broom::tidy(model))
+        ) |> 
+  tidyr::unnest(summary) |>
+  select(-data, -model)
+
+
+# But this gives different results???
+results |> 
+  mutate(location = ordered(location, levels = c("proximal", "distal", "position"))) |>
+  pivot_wider(names_from = plate, values_from = value) |> 
+  nest(.by = location) |> 
+  mutate(
+    t_test = map(data, ~ t.test(.x$long, .x$short, paired = TRUE) |> broom::tidy())
+    ) |> 
+  unnest(t_test)
+
+
+# Pairwise using t.test
+results |> 
+  mutate(location = ordered(location, levels = c("proximal", "distal", "position"))) |>
+  pivot_wider(names_from = plate, values_from = value) |>
+  nest(.by = location) |> 
+  mutate(
+    t_test = map(data, ~ t.test(.x$long, .x$short, paired = TRUE) |> broom::tidy())
+    ) |> 
+  unnest(t_test) |>
+  arrange(location)
+
+# Pairwise using pairwise.t.test
+results %>%
+  mutate(location = ordered(location, levels = c("proximal", "distal", "position"))) |>
+  nest_by(location) %>%
+  mutate(
+    t_test = list(pairwise.t.test(x = data$value, 
+                                  g = data$plate, 
+                                  p.adjust = "bonferroni") |> broom::tidy()
+                  )
+    ) |> 
+  unnest(t_test) |>
+  arrange(location)
+
+# Power os a paired t.test
+results |>  
+  mutate(location = ordered(location, levels = c("proximal", "distal", "position"))) |>
+  pivot_wider(names_from = plate, values_from = value) |> 
+  nest(.by = location) |> 
+  mutate(t_test = map(data, 
+                      ~ {delta = .x$short -.x$long; 
+                         power.t.test(delta = mean(delta), 
+                                      sd = sd(delta), 
+                                      sig.level = 0.05, 
+                                      power = 0.8, 
+                                      type = "paired", 
+                                      alternative = "two.sided")
+                        } |> broom::tidy())
+         ) |> 
+  unnest(t_test) |>
+  arrange(location)
+
+
+

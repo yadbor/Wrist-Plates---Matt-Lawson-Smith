@@ -1,7 +1,7 @@
 ---
 title: "Medartis Wrist Plates"
 subtitle: "Experiment 2 - bending and shear matched"
-date: 2024-07-23
+date: last-modified
 format: 
   html: default
   pdf: default
@@ -408,6 +408,18 @@ summary(model)
 ```
 
 This shows no significant difference between the two plate designs.
+
+```{r}
+#| label: mean differences
+#| digits: 3
+loading |>
+  filter(rep == 1) |>
+  mutate(stiffness = mean(motion)) |> 
+  group_by(plate) |> 
+  summarise(median = median(motion), mean = mean(motion)) |> 
+  mutate(across(is.numeric, ~ round(.x, digits = 3)))
+```
+
 The box plot shows this graphically.
 
 ```{r}

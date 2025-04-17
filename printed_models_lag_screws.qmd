@@ -1,0 +1,522 @@
+---
+title: "Medartis Wrist Plates"
+subtitle: "3D printed models - Experiment 2 - bending and shear matched"
+date: last-modified
+format: 
+  html: default
+  pdf: default
+  docx: default
+---
+
+## background
+
+This file compares the results from Experiment 2 on the 3D printed models
+with the same models and plates, just with the lag screws removed.
+
+Experiment 2 used 3D printed bone surogates, designed to match the underside 
+of each plate design. 
+The loading apparatus was designed to put the point of load application at the
+same distance from the 'fusion' site, to mathc the bending moment and shear 
+between the two plates being tested (long and short).
+
+In addition, the short plates have a pair of lag screws that cross the 'fusion'
+site.
+We hypothesised that removing these screws would reduce the stiffness of the 
+construct.
+
+## setup
+
+Load any needed libraries and define some constants.
+
+```{r}
+#| label: setup
+#| warning: false
+#| message: false
+
+library(dplyr) # for manipulating dataframes
+library(ggplot2) # for plotting
+
+# If you don't have bluer install it with 
+# install.packages("devtools")
+# devtools::install_github(repo = "yadbor/bluer")
+library(bluer) # routines for analysing mechanical test data
+
+```
+
+## read the data files
+
+Get all the `.csv` file names under the `data_root` folder 
+and store them in a `list`.
+
+Then run the list of file paths names through a pipeline 
+that does the following:
+
+1.  Name every list element with the `basename` from the path \
+(i.e. just the file name with no path or extension)
+1.  Read each .csv file into the list as a dataframe
+1.  Keep only the wanted columns in each dataframe
+1.  Stack the read dataframes, adding the names from the list as a column
+
+```{r}
+#| label: load_data_files
+#| warning: false
+
+data_root <- here::here("data-raw", "Experiment 2", "Results", "VIC-3D data")
+# Find all .csv files under the data_root
+file_path <- list.files(path = data_root, pattern = "*.csv", 
+                         full.names = TRUE, recursive = TRUE)
+
+all_results <- file_path |>        
+  setNames(basename(file_path)) |> # name each item in the list with its basename
+  purrr::map( \(df) readr::read_csv(df, show_col_types = FALSE)) |>
+  bind_rows(.id = "filename")      # bind together, adding a column for the name
+
+```
+
+`all_results` is now a big dataframe 
+(actually a [tibble](https://tibble.tidyverse.org/)) 
+holding all of the results from all of the tests, labelled with their file name.
+
+This approach works well for studies like this one,
+where all the meta-data are in the file names. 
+
+Some studies have some or all of the meta-data in the folder name.
+This is the case for Instron raw data files, where the files are just numbered
+and stored in a folder named for the test.
+
+In those cases the final folder name of a path can be extracted using
+`basename(dirname(full_path))`.
+
+Studies with the metadata in several parts of the path can either be split by
+repeatedly taking off the final component, or the path can be analysed with
+the usual string manipulation tools (see `stringr`).
+
+## extract test information
+
+The filenames have the plate type, id and repeat encoded as:
+
+"{Long|Short} Plate {id} T{repeat}_Data.csv"
+
+Extract these into separate columns to identify each test.
+Because the filenames don't have clean delimiters use a [regex](https://search.r-project.org/R/refmans/base/html/regex.html) 
+to break them up.
+
+Some file names have special issues, like the two tests that were repeated 
+(T1.2 & T2.2).
+Clean those up here as well.
+
+```{r}
+#| label: parse_filenames
+
+all_results <- all_results |>
+  tidyr::separate_wider_regex(cols = filename,
+                              patterns = c(plate = "^\\w+", "\\D*", 
+                                           id = "\\d+", "\\s*T", 
+                                           rep = "[\\d\\.]+", ".*"),
+                              cols_remove = FALSE
+                              ) |>
+  # Deal with special cases. 
+  # In this study, T1.2 and T2.2 replaced T1 and T2
+  mutate(rep = stringr::str_remove(rep, "\\..*")) # delete everything after "."
+
+```
+
+Replace the column names with names that are easier to manipulate in code but 
+still convey their meaning.
+
+```{r}
+#| label: rename_columns
+
+all_results <- all_results |>
+  rename(frame = `File Number`, 
+         u = `U [mm]`, v = `V [mm]`, w = `W [mm]`,
+         time = `Time_1`)
+```
+
+## read the new no-lag-screw data
+
+The code above is the same as the previous `Experiment 2` analysis.
+Now load the data for the tests with no lag screw.
+
+The no-lag-screw condition is coded in the file name, but add it to the plate 
+name so they can be easily distnguished.
+
+```{r}
+#| label: load no-lag-screw results
+
+nls_data <- here::here("data-raw", "no_lag_screw")
+
+nls_path <- list.files(path = nls_data, pattern = "*.csv", 
+                         full.names = TRUE, recursive = TRUE)
+
+nls_results <- nls_path |>        
+  setNames(basename(nls_path)) |> # name each item in the list with its basename
+  purrr::map( \(df) readr::read_csv(df, show_col_types = FALSE)) |>
+  bind_rows(.id = "filename")      # bind together, adding a column for the name
+
+# Process as before
+nls_results <- nls_results |>
+  tidyr::separate_wider_regex(cols = filename,
+                              patterns = c(plate = "^\\w+", "\\D*", 
+                                           id = "\\d+", 
+                                           ".*"),
+                              cols_remove = FALSE
+                              ) |>
+  # Only one rep for these tests. Make it the same as in all_results
+  mutate(rep = "1") |> 
+  relocate(rep, .before = filename) |>
+  # rename columns to something more tractable
+  rename(frame = `File Number`, 
+         u = `U [mm]`, v = `V [mm]`, w = `W [mm]`,
+         time = `Time_1`) |>
+  # Add the NLS in the plate name
+  mutate(plate = if_else(stringr::str_detect(filename, "NLS"), 
+                         paste0(plate, "_nls"), 
+                         plate)
+         )
+  
+```
+
+
+## save clean data
+
+Write the cleaned data to a `.csv` file before starting the analysis.
+```{r}
+#| label: save_data
+
+all_results |> 
+  readr::write_csv(file = here::here("data", "all_results.csv"))
+
+nls_results |>
+  readr::write_csv(file = here::here("data", "nls_results.csv"))
+  
+```
+
+## analyse cycles
+
+Each test has multiple load-unload cycles. 
+Data are recorded on the 9^th^ and 10^th^ cycles, and this is repeated 
+every 10 cycles up to a total of 60 cycles.
+We are interested in the loading part of each cycle.
+
+Divide test into cycles by finding peaks and troughs, which are defined as local
+maxima and minima.
+The loading phase is the one going towards a peak, and the unloading phase is
+towards a trough.
+
+The `bluer` package has routines for finding peaks and labelling cycles 
+and phases.
+
+But first, as these tests are all in compression, both the load and position 
+are negative.
+Invert them both so that graphs read better for most people.
+
+```{r}
+#| label: label_cycles
+
+cycles <- all_results |> 
+  mutate(position = -1.0 * position, load = -1.0 * load) |> # Invert these axes
+  group_by(plate, id, rep) |> # group each test
+  mutate(as_tibble(bluer::label_cycles(position))) |> # and label the cycles
+  mutate(cycle = factor(cycle)) |> # Make the cycle a factor for easier plotting
+  mutate(uid = paste0(plate,id,rep,cycle)) # uniquely identify each cycle
+
+nls_cycles <- nls_results  |> 
+  mutate(position = -1.0 * position, load = -1.0 * load) |> # Invert these axes
+  group_by(plate, id, rep) |> # group each test
+  mutate(as_tibble(bluer::label_cycles(position))) |> # and label the cycles
+  mutate(cycle = factor(cycle)) |> # Make the cycle a factor for easier plotting
+  mutate(uid = paste0(plate,id,rep,cycle)) # uniquely identify each cycle
+```
+
+## combine data
+
+The no-lag-screw tests were done after all the reps of the lag screw tests.
+`Experiment 2` showed no effect of repeated testing for this model, 
+but the last rep of the long and lag-screw short plates were combined with 
+the last rep of the no-lag-screw short plates to ensure they were as comparable
+as possible.
+
+```{r}
+#| label: combine last rep of previous with nls
+
+both_cycles <- cycles |> 
+  group_by(plate, id) |> 
+  filter(rep == max(rep)) |>
+  bind_rows(nls_cycles)
+  
+```
+
+
+Save the labelled data.
+```{r}
+#| label: write_cleaned_data
+readr::write_csv(both_cycles, file = here::here("data", "has_lag_cycles.csv"))
+```
+
+If the data files have already been cleaned up and combined, 
+just read the processed data from `experiment2_cycles.csv`.
+
+These have been extracted from the raw files, compiled into a single table,
+split into cycles (and the load and unload segment of each cycle), and had
+the study metadata parsed out of the file name.
+
+```{r}
+#| label: read_data
+#| eval: false # change this to read the file
+both_cycles <- readr::read_csv(file = here::here("data", "has_lag_cycles.csv"),
+                               show_col_types = FALSE)
+```
+
+
+```{r}
+# Check what we have done
+# Now only have one repeat for each plate
+both_cycles |> 
+    ggplot() + 
+    aes(x = time, y = position, colour = seg, group = rep) +
+    geom_point() +
+    facet_grid(rows = vars(plate), cols = vars(id))
+
+```
+
+:::{.callout-note}
+**Plate 1 is missing the load & position data from VIC-3D,**
+**probably because the analog capture was not exported.**
+**Fix this before final analysis.**
+:::
+
+Plot just the loading portion of each cycle, as load vs position.
+```{r}
+#| label: plot_load_position
+
+loading <- both_cycles |> 
+    filter(seg == "load")
+
+# Then the first repeat for each plate (between plates)
+loading |>
+    #filter(rep == 1) |>
+    ggplot() + 
+    aes(x = position, y = load, colour = cycle, group = uid) +
+    geom_line() +
+    facet_grid(rows = vars(id), cols = vars(plate)) +
+    labs(title = "load vs position - for each plate")
+
+```
+
+## clean the motion data
+
+There are anomalies in the motion data.
+The first cycles begins at `u == 0`, by definition (load about 20 N), 
+but subsequent cycles begin at variable positions depending on exactly where 
+the cycle start was found.
+Likewise, some tests show an anomaly at the peak motion, probably due again to
+not quite catching the turning points.
+
+Fix these by starting at the first point where `u >= 0`. 
+At the top can just trim the last two data points to avoid the issue, 
+but it doesn't have much effect on the slope calculation so leave it for now.
+
+Then calculate the total motion at the fusion site from the vector sum of the 
+three individual motions `(u, v, w)`
+
+```{r}
+loading <- loading |> 
+  group_by(plate, id, rep, cycle) |> 
+  filter(u >= 0) |>
+  mutate(motion = sqrt(u^2 + v^2 + w^2)) 
+```
+
+## fusion site motion
+
+```{r}
+# Make a plot for each plate
+
+plot_p <- loading |>
+    #filter(rep == 1) |>
+    ggplot() + 
+    aes(y = motion, x = load, colour = cycle, group = uid) +
+    geom_line() +
+    facet_grid(rows = vars(plate), cols = vars(id)) +
+    labs(title = "load vs motion")
+print(plot_p)
+ggsave(filename = here::here("data", "motion_vs_cycle.png"), plot = plot_p)
+```
+```{r}
+# Make a plot for each repeat
+
+plot_p <- loading |>
+    #filter(id == 1) |>
+    ggplot() + 
+    aes(y = motion, x = load, colour = cycle, group = uid) +
+    geom_line() +
+    facet_grid(rows = vars(plate)) +
+    labs(title = "load vs motion")
+print(plot_p)
+ggsave(filename = here::here("data", "motion_vs_rep.png"), plot = plot_p)
+```
+
+## analysis
+
+To get the stiffness of each test we fit a linear model by least squares.
+
+We can analyse total motion at the end of the "metacarpal" (`position`), 
+or the total motion at the fusion site (`motion`).
+The latter is what is more clinically relevant, and by measuring at
+the fusion site we remove the effect of differing bending in the 3D printed
+bone analogues.
+
+**Note that repeat 3 shows more variation.**
+**This was also evident in the Instron raw data,** 
+**and may be due to some electrical interference.**
+
+```{r}
+#| label: fit_lines
+
+loading_models <- loading |>
+  group_by(plate, id, cycle) |>
+  summarise(
+    position_model = list(
+      lm(load ~ position, data = pick(everything()))
+    ),
+    motion_model = list(
+      lm(load ~ motion, data = pick(everything()))
+    )
+  )
+
+# Extract the slope components (estimate) of the models
+stiffness <- loading_models |>
+  mutate(across(ends_with("model"), ~ purrr::map(.x, broom::tidy), 
+                .names = "{.col}_tidy")) |> 
+  tidyr::unnest(ends_with("tidy"), names_sep = "_") |>
+  filter(position_model_tidy_term != "(Intercept)") |> 
+  select(plate, id, rep, cycle, ends_with("estimate")) |>
+  rename_with(~ stringr::str_remove(.x, "_model_tidy_estimate"))
+
+# Plot the stiffness per cycle as a check
+stiffness |> 
+  filter(id == 1) |>
+  ggplot() +
+  aes(x= cycle, y = motion, colour = plate) +
+  geom_point() +
+  facet_grid(rows = vars(plate), cols = vars(rep)) +
+  labs(title = "stiffness - plate 1 all repeats")
+
+stiffness |> 
+  filter(rep == 1) |> 
+  ggplot() +
+  aes(x= cycle, y = motion, colour = plate) +
+  geom_point() +
+  facet_grid(cols = vars(id), rows = vars(plate)) +
+  labs(title = "stiffness - repeat 1 of each plate")
+
+```
+## save the calculated stiffness results
+
+Write out the calculated stifness results.
+These can be read to apply different analysis, without re-calculating from the raw data.
+
+```{r}
+#| label: save_stiffness
+readr::write_csv(stiffness, file = here::here("data", "experiment2_stiffness.csv"))
+```
+
+## check for effect of cycling
+
+We have six plates.
+Plate 1 of each type was tested multiple times, 
+to measure the effect of repeat testing.
+Plates 2 -- 6 of each type were each tested once.
+Every test was made up of 60 cycles, with two cycles recorded every 10 - so
+cycles 9, 10, 19, 20, 29, 30, 39, 40, 49, 50, 50, 60.
+
+To test if repeated cycling is having an effect use a repeated 
+measures ANOVA, as the cycles are repeated on the same subject for each test.
+
+```{r}
+#| label: repeated_measures_anova
+
+# For repeats of the first plate
+stiffness |> 
+  ungroup() |> 
+  filter(id == 1) |> 
+  nest_by(plate) |> 
+  mutate(model = list(aov(motion ~ cycle + Error(factor(rep)), data = data)),
+         summary = list(broom::tidy(model))
+         ) |> 
+  tidyr::unnest(summary) |> 
+  select(-data, -model)
+
+# Across plates
+stiffness |> 
+  ungroup() |> 
+  filter(rep == 1) |> 
+  nest_by(plate) |> 
+  mutate(model = list(aov(motion ~ cycle + Error(factor(id)), data = data)),
+         summary = list(broom::tidy(model))
+         ) |> 
+  tidyr::unnest(summary) |> 
+  select(-data, -model)
+
+```
+None of the tests are significant, so we can conclude that the stiffness is not 
+changed by multiple cycles.
+This means they can be averaged to reduce the variation between cycles.
+
+Use the averaged stiffnesses in an ANOVA to look for differences due to plate type.
+```{r}
+#| label: compare_plates
+#| warning: false
+#| message: false
+
+model <- stiffness |>
+  summarise(stiffness = mean(motion), .groups = "keep") |>
+  ungroup() |>
+  filter(rep == 1) |>
+  aov(stiffness ~ plate, data = _)
+
+summary(model)
+```
+
+This shows no significant difference between the two plate designs.
+
+```{r}
+#| label: mean differences
+#| digits: 3
+loading |>
+  filter(rep == 1) |>
+  mutate(stiffness = mean(motion)) |> 
+  group_by(plate) |> 
+  summarise(median = median(motion), mean = mean(motion)) |> 
+  mutate(across(is.numeric, ~ round(.x, digits = 3)))
+```
+
+The box plot shows this graphically.
+
+```{r}
+#| label: compare_plate_types
+#| message: false
+#| warning: false
+
+# Compare average stiffness between plates
+
+# This is for insertion into Matt's presentation, so want to use the font 
+# Calibri, like the rest of the slides. These need to be installed previously.
+
+extrafont::loadfonts() # makes other fonts available to R
+
+plot_box <- loading |>
+    filter(rep == 1) |>
+    mutate(stiffness = mean(motion)) |>
+    ggplot() + 
+    aes(y = motion, x = plate) +
+    geom_boxplot() +
+    theme_bw(base_size = 14, base_family = "Calibri") 
+    #labs(title = "plate stiffness")
+print(plot_box)
+
+ggsave(filename = here::here("data", "stiffness_between_plates.png"), 
+       plot = plot_box, 
+       width = 21, height = 12, units = "cm")
+```
+

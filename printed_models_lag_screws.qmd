@@ -6,23 +6,26 @@ format:
   html: default
   pdf: default
   docx: default
+editor: 
+  markdown: 
+    wrap: 72
 ---
 
 ## background
 
-This file compares the results from Experiment 2 on the 3D printed models
-with the same models and plates, just with the lag screws removed.
+This file compares the results from Experiment 2 on the 3D printed
+models with the same models and plates, just with the lag screws
+removed.
 
-Experiment 2 used 3D printed bone surogates, designed to match the underside 
-of each plate design. 
-The loading apparatus was designed to put the point of load application at the
-same distance from the 'fusion' site, to mathc the bending moment and shear 
-between the two plates being tested (long and short).
+Experiment 2 used 3D printed bone surogates, designed to match the
+underside of each plate design. The loading apparatus was designed to
+put the point of load application at the same distance from the 'fusion'
+site, to mathc the bending moment and shear between the two plates being
+tested (long and short).
 
-In addition, the short plates have a pair of lag screws that cross the 'fusion'
-site.
-We hypothesised that removing these screws would reduce the stiffness of the 
-construct.
+In addition, the short plates have a pair of lag screws that cross the
+'fusion' site. We hypothesised that removing these screws would reduce
+the stiffness of the construct.
 
 ## setup
 
@@ -45,17 +48,18 @@ library(bluer) # routines for analysing mechanical test data
 
 ## read the data files
 
-Get all the `.csv` file names under the `data_root` folder 
-and store them in a `list`.
+Get all the `.csv` file names under the `data_root` folder and store
+them in a `list`.
 
-Then run the list of file paths names through a pipeline 
-that does the following:
+Then run the list of file paths names through a pipeline that does the
+following:
 
-1.  Name every list element with the `basename` from the path \
-(i.e. just the file name with no path or extension)
-1.  Read each .csv file into the list as a dataframe
-1.  Keep only the wanted columns in each dataframe
-1.  Stack the read dataframes, adding the names from the list as a column
+1.  Name every list element with the `basename` from the path\
+    (i.e. just the file name with no path or extension)
+2.  Read each .csv file into the list as a dataframe
+3.  Keep only the wanted columns in each dataframe
+4.  Stack the read dataframes, adding the names from the list as a
+    column
 
 ```{r}
 #| label: load_data_files
@@ -73,37 +77,37 @@ all_results <- file_path |>
 
 ```
 
-`all_results` is now a big dataframe 
-(actually a [tibble](https://tibble.tidyverse.org/)) 
-holding all of the results from all of the tests, labelled with their file name.
+`all_results` is now a big dataframe (actually a
+[tibble](https://tibble.tidyverse.org/)) holding all of the results from
+all of the tests, labelled with their file name.
 
-This approach works well for studies like this one,
-where all the meta-data are in the file names. 
+This approach works well for studies like this one, where all the
+meta-data are in the file names.
 
-Some studies have some or all of the meta-data in the folder name.
-This is the case for Instron raw data files, where the files are just numbered
-and stored in a folder named for the test.
+Some studies have some or all of the meta-data in the folder name. This
+is the case for Instron raw data files, where the files are just
+numbered and stored in a folder named for the test.
 
 In those cases the final folder name of a path can be extracted using
 `basename(dirname(full_path))`.
 
-Studies with the metadata in several parts of the path can either be split by
-repeatedly taking off the final component, or the path can be analysed with
-the usual string manipulation tools (see `stringr`).
+Studies with the metadata in several parts of the path can either be
+split by repeatedly taking off the final component, or the path can be
+analysed with the usual string manipulation tools (see `stringr`).
 
 ## extract test information
 
 The filenames have the plate type, id and repeat encoded as:
 
-"{Long|Short} Plate {id} T{repeat}_Data.csv"
+"{Long\|Short} Plate {id} T{repeat}\_Data.csv"
 
-Extract these into separate columns to identify each test.
-Because the filenames don't have clean delimiters use a [regex](https://search.r-project.org/R/refmans/base/html/regex.html) 
-to break them up.
+Extract these into separate columns to identify each test. Because the
+filenames don't have clean delimiters use a
+[regex](https://search.r-project.org/R/refmans/base/html/regex.html) to
+break them up.
 
-Some file names have special issues, like the two tests that were repeated 
-(T1.2 & T2.2).
-Clean those up here as well.
+Some file names have special issues, like the two tests that were
+repeated (T1.2 & T2.2). Clean those up here as well.
 
 ```{r}
 #| label: parse_filenames
@@ -121,8 +125,8 @@ all_results <- all_results |>
 
 ```
 
-Replace the column names with names that are easier to manipulate in code but 
-still convey their meaning.
+Replace the column names with names that are easier to manipulate in
+code but still convey their meaning.
 
 ```{r}
 #| label: rename_columns
@@ -135,11 +139,11 @@ all_results <- all_results |>
 
 ## read the new no-lag-screw data
 
-The code above is the same as the previous `Experiment 2` analysis.
-Now load the data for the tests with no lag screw.
+The code above is the same as the previous `Experiment 2` analysis. Now
+load the data for the tests with no lag screw.
 
-The no-lag-screw condition is coded in the file name, but add it to the plate 
-name so they can be easily distnguished.
+The no-lag-screw condition is coded in the file name, but add it to the
+plate name so they can be easily distnguished.
 
 ```{r}
 #| label: load no-lag-screw results
@@ -177,10 +181,10 @@ nls_results <- nls_results |>
   
 ```
 
-
 ## save clean data
 
 Write the cleaned data to a `.csv` file before starting the analysis.
+
 ```{r}
 #| label: save_data
 
@@ -194,22 +198,20 @@ nls_results |>
 
 ## analyse cycles
 
-Each test has multiple load-unload cycles. 
-Data are recorded on the 9^th^ and 10^th^ cycles, and this is repeated 
-every 10 cycles up to a total of 60 cycles.
-We are interested in the loading part of each cycle.
+Each test has multiple load-unload cycles. Data are recorded on the
+9^th^ and 10^th^ cycles, and this is repeated every 10 cycles up to a
+total of 60 cycles. We are interested in the loading part of each cycle.
 
-Divide test into cycles by finding peaks and troughs, which are defined as local
-maxima and minima.
-The loading phase is the one going towards a peak, and the unloading phase is
-towards a trough.
+Divide test into cycles by finding peaks and troughs, which are defined
+as local maxima and minima. The loading phase is the one going towards a
+peak, and the unloading phase is towards a trough.
 
-The `bluer` package has routines for finding peaks and labelling cycles 
+The `bluer` package has routines for finding peaks and labelling cycles
 and phases.
 
-But first, as these tests are all in compression, both the load and position 
-are negative.
-Invert them both so that graphs read better for most people.
+But first, as these tests are all in compression, both the load and
+position are negative. Invert them both so that graphs read better for
+most people.
 
 ```{r}
 #| label: label_cycles
@@ -231,11 +233,11 @@ nls_cycles <- nls_results  |>
 
 ## combine data
 
-The no-lag-screw tests were done after all the reps of the lag screw tests.
-`Experiment 2` showed no effect of repeated testing for this model, 
-but the last rep of the long and lag-screw short plates were combined with 
-the last rep of the no-lag-screw short plates to ensure they were as comparable
-as possible.
+The no-lag-screw tests were done after all the reps of the lag screw
+tests. `Experiment 2` showed no effect of repeated testing for this
+model, but the last rep of the long and lag-screw short plates were
+combined with the last rep of the no-lag-screw short plates to ensure
+they were as comparable as possible.
 
 ```{r}
 #| label: combine last rep of previous with nls
@@ -247,19 +249,19 @@ both_cycles <- cycles |>
   
 ```
 
-
 Save the labelled data.
+
 ```{r}
 #| label: write_cleaned_data
 readr::write_csv(both_cycles, file = here::here("data", "has_lag_cycles.csv"))
 ```
 
-If the data files have already been cleaned up and combined, 
-just read the processed data from `experiment2_cycles.csv`.
+If the data files have already been cleaned up and combined, just read
+the processed data from `experiment2_cycles.csv`.
 
-These have been extracted from the raw files, compiled into a single table,
-split into cycles (and the load and unload segment of each cycle), and had
-the study metadata parsed out of the file name.
+These have been extracted from the raw files, compiled into a single
+table, split into cycles (and the load and unload segment of each
+cycle), and had the study metadata parsed out of the file name.
 
 ```{r}
 #| label: read_data
@@ -267,7 +269,6 @@ the study metadata parsed out of the file name.
 both_cycles <- readr::read_csv(file = here::here("data", "has_lag_cycles.csv"),
                                show_col_types = FALSE)
 ```
-
 
 ```{r}
 # Check what we have done
@@ -280,13 +281,14 @@ both_cycles |>
 
 ```
 
-:::{.callout-note}
-**Plate 1 is missing the load & position data from VIC-3D,**
-**probably because the analog capture was not exported.**
-**Fix this before final analysis.**
+::: callout-note
+**Plate 1 is missing the load & position data from VIC-3D,** **probably
+because the analog capture was not exported.** **Fix this before final
+analysis.**
 :::
 
 Plot just the loading portion of each cycle, as load vs position.
+
 ```{r}
 #| label: plot_load_position
 
@@ -306,19 +308,18 @@ loading |>
 
 ## clean the motion data
 
-There are anomalies in the motion data.
-The first cycles begins at `u == 0`, by definition (load about 20 N), 
-but subsequent cycles begin at variable positions depending on exactly where 
-the cycle start was found.
-Likewise, some tests show an anomaly at the peak motion, probably due again to
-not quite catching the turning points.
+There are anomalies in the motion data. The first cycles begins at
+`u == 0`, by definition (load about 20 N), but subsequent cycles begin
+at variable positions depending on exactly where the cycle start was
+found. Likewise, some tests show an anomaly at the peak motion, probably
+due again to not quite catching the turning points.
 
-Fix these by starting at the first point where `u >= 0`. 
-At the top can just trim the last two data points to avoid the issue, 
-but it doesn't have much effect on the slope calculation so leave it for now.
+Fix these by starting at the first point where `u >= 0`. At the top can
+just trim the last two data points to avoid the issue, but it doesn't
+have much effect on the slope calculation so leave it for now.
 
-Then calculate the total motion at the fusion site from the vector sum of the 
-three individual motions `(u, v, w)`
+Then calculate the total motion at the fusion site from the vector sum
+of the three individual motions `(u, v, w)`
 
 ```{r}
 loading <- loading |> 
@@ -342,6 +343,7 @@ plot_p <- loading |>
 print(plot_p)
 ggsave(filename = here::here("data", "motion_vs_cycle.png"), plot = plot_p)
 ```
+
 ```{r}
 # Make a plot for each repeat
 
@@ -358,17 +360,18 @@ ggsave(filename = here::here("data", "motion_vs_rep.png"), plot = plot_p)
 
 ## analysis
 
-To get the stiffness of each test we fit a linear model by least squares.
+To get the stiffness of each test we fit a linear model by least
+squares.
 
-We can analyse total motion at the end of the "metacarpal" (`position`), 
-or the total motion at the fusion site (`motion`).
-The latter is what is more clinically relevant, and by measuring at
-the fusion site we remove the effect of differing bending in the 3D printed
-bone analogues.
+We can analyse total motion at the end of the "metacarpal" (`position`),
+or the total motion at the fusion site (`motion`). The latter is what is
+more clinically relevant, and by measuring at the fusion site we remove
+the effect of differing bending in the 3D printed bone analogues.
 
-**Note that repeat 3 shows more variation.**
-**This was also evident in the Instron raw data,** 
-**and may be due to some electrical interference.**
+::: callout-note
+**Code below fails due to `NA`s in Plate 1 (missing the load &
+position).** **Fix this before final analysis.**
+:::
 
 ```{r}
 #| label: fit_lines
@@ -411,10 +414,11 @@ stiffness |>
   labs(title = "stiffness - repeat 1 of each plate")
 
 ```
+
 ## save the calculated stiffness results
 
-Write out the calculated stifness results.
-These can be read to apply different analysis, without re-calculating from the raw data.
+Write out the calculated stifness results. These can be read to apply
+different analysis, without re-calculating from the raw data.
 
 ```{r}
 #| label: save_stiffness
@@ -423,15 +427,14 @@ readr::write_csv(stiffness, file = here::here("data", "experiment2_stiffness.csv
 
 ## check for effect of cycling
 
-We have six plates.
-Plate 1 of each type was tested multiple times, 
-to measure the effect of repeat testing.
-Plates 2 -- 6 of each type were each tested once.
-Every test was made up of 60 cycles, with two cycles recorded every 10 - so
-cycles 9, 10, 19, 20, 29, 30, 39, 40, 49, 50, 50, 60.
+We have six plates. Plate 1 of each type was tested multiple times, to
+measure the effect of repeat testing. Plates 2 -- 6 of each type were
+each tested once. Every test was made up of 60 cycles, with two cycles
+recorded every 10 - so cycles 9, 10, 19, 20, 29, 30, 39, 40, 49, 50, 50,
+60.
 
-To test if repeated cycling is having an effect use a repeated 
-measures ANOVA, as the cycles are repeated on the same subject for each test.
+To test if repeated cycling is having an effect use a repeated measures
+ANOVA, as the cycles are repeated on the same subject for each test.
 
 ```{r}
 #| label: repeated_measures_anova
@@ -459,11 +462,14 @@ stiffness |>
   select(-data, -model)
 
 ```
-None of the tests are significant, so we can conclude that the stiffness is not 
-changed by multiple cycles.
-This means they can be averaged to reduce the variation between cycles.
 
-Use the averaged stiffnesses in an ANOVA to look for differences due to plate type.
+None of the tests are significant, so we can conclude that the stiffness
+is not changed by multiple cycles. This means they can be averaged to
+reduce the variation between cycles.
+
+Use the averaged stiffnesses in an ANOVA to look for differences due to
+plate type.
+
 ```{r}
 #| label: compare_plates
 #| warning: false
@@ -519,4 +525,3 @@ ggsave(filename = here::here("data", "stiffness_between_plates.png"),
        plot = plot_box, 
        width = 21, height = 12, units = "cm")
 ```
-

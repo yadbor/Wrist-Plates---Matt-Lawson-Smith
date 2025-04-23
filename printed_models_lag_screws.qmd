@@ -150,11 +150,16 @@ plate name so they can be easily distnguished.
 
 nls_data <- here::here("data-raw", "no_lag_screw")
 
-nls_path <- list.files(path = nls_data, pattern = "*.csv", 
+nls_paths <- list.files(path = nls_data, pattern = "*.csv", 
                          full.names = TRUE, recursive = TRUE)
 
-nls_results <- nls_path |>        
-  setNames(basename(nls_path)) |> # name each item in the list with its basename
+## Filter out the original Plate 1 results, 
+## as that doesn't have the load & position data (wasn't extracted from VIC-3D).
+
+nls_paths <- nls_paths |> stringr::str_subset("orig", negate = TRUE)
+
+nls_results <- nls_paths |>        
+  setNames(basename(nls_paths)) |> # name each item in the list with its basename
   purrr::map( \(df) readr::read_csv(df, show_col_types = FALSE)) |>
   bind_rows(.id = "filename")      # bind together, adding a column for the name
 
@@ -368,11 +373,6 @@ or the total motion at the fusion site (`motion`). The latter is what is
 more clinically relevant, and by measuring at the fusion site we remove
 the effect of differing bending in the 3D printed bone analogues.
 
-::: callout-note
-**Code below fails due to `NA`s in Plate 1 (missing the load &
-position).** **Fix this before final analysis.**
-:::
-
 ```{r}
 #| label: fit_lines
 
@@ -393,20 +393,11 @@ stiffness <- loading_models |>
                 .names = "{.col}_tidy")) |> 
   tidyr::unnest(ends_with("tidy"), names_sep = "_") |>
   filter(position_model_tidy_term != "(Intercept)") |> 
-  select(plate, id, rep, cycle, ends_with("estimate")) |>
+  select(plate, id, cycle, ends_with("estimate")) |>
   rename_with(~ stringr::str_remove(.x, "_model_tidy_estimate"))
 
 # Plot the stiffness per cycle as a check
 stiffness |> 
-  filter(id == 1) |>
-  ggplot() +
-  aes(x= cycle, y = motion, colour = plate) +
-  geom_point() +
-  facet_grid(rows = vars(plate), cols = vars(rep)) +
-  labs(title = "stiffness - plate 1 all repeats")
-
-stiffness |> 
-  filter(rep == 1) |> 
   ggplot() +
   aes(x= cycle, y = motion, colour = plate) +
   geom_point() +
@@ -427,44 +418,7 @@ readr::write_csv(stiffness, file = here::here("data", "experiment2_stiffness.csv
 
 ## check for effect of cycling
 
-We have six plates. Plate 1 of each type was tested multiple times, to
-measure the effect of repeat testing. Plates 2 -- 6 of each type were
-each tested once. Every test was made up of 60 cycles, with two cycles
-recorded every 10 - so cycles 9, 10, 19, 20, 29, 30, 39, 40, 49, 50, 50,
-60.
-
-To test if repeated cycling is having an effect use a repeated measures
-ANOVA, as the cycles are repeated on the same subject for each test.
-
-```{r}
-#| label: repeated_measures_anova
-
-# For repeats of the first plate
-stiffness |> 
-  ungroup() |> 
-  filter(id == 1) |> 
-  nest_by(plate) |> 
-  mutate(model = list(aov(motion ~ cycle + Error(factor(rep)), data = data)),
-         summary = list(broom::tidy(model))
-         ) |> 
-  tidyr::unnest(summary) |> 
-  select(-data, -model)
-
-# Across plates
-stiffness |> 
-  ungroup() |> 
-  filter(rep == 1) |> 
-  nest_by(plate) |> 
-  mutate(model = list(aov(motion ~ cycle + Error(factor(id)), data = data)),
-         summary = list(broom::tidy(model))
-         ) |> 
-  tidyr::unnest(summary) |> 
-  select(-data, -model)
-
-```
-
-None of the tests are significant, so we can conclude that the stiffness
-is not changed by multiple cycles. This means they can be averaged to
+Done previously - no effect, so cycles can be averaged to
 reduce the variation between cycles.
 
 Use the averaged stiffnesses in an ANOVA to look for differences due to
@@ -478,24 +432,22 @@ plate type.
 model <- stiffness |>
   summarise(stiffness = mean(motion), .groups = "keep") |>
   ungroup() |>
-  filter(rep == 1) |>
   aov(stiffness ~ plate, data = _)
 
 summary(model)
 ```
 
-This shows no significant difference between the two plate designs.
+This shows a significant difference between the plate designs.
 
+To see where the differences are, use Tukey's Honsetly Significant Differences.
 ```{r}
-#| label: mean differences
-#| digits: 3
-loading |>
-  filter(rep == 1) |>
-  mutate(stiffness = mean(motion)) |> 
-  group_by(plate) |> 
-  summarise(median = median(motion), mean = mean(motion)) |> 
-  mutate(across(is.numeric, ~ round(.x, digits = 3)))
+#| label: TukeyHSD
+
+model |> TukeyHSD()
 ```
+This result confirms that the Short and Long plates are not different, 
+but the Short-nls plates *are* significantly less stiff than 
+both the Short and Long plates.
 
 The box plot shows this graphically.
 
@@ -512,7 +464,6 @@ The box plot shows this graphically.
 extrafont::loadfonts() # makes other fonts available to R
 
 plot_box <- loading |>
-    filter(rep == 1) |>
     mutate(stiffness = mean(motion)) |>
     ggplot() + 
     aes(y = motion, x = plate) +
@@ -525,3 +476,49 @@ ggsave(filename = here::here("data", "stiffness_between_plates.png"),
        plot = plot_box, 
        width = 21, height = 12, units = "cm")
 ```
+
+Note between plate variability is greater for the no lag screw constructs than 
+either the Long or Short with lag screw constructs.
+
+## Paired Short plates
+
+As the short plates are tested before and after removing the lag screws we can
+use a paired t test.
+This gives an even smller p value, which is expected as paired tests reduce the
+between samples variability and so have greater discriminatory power.
+
+```{r}
+#| label: paired test
+
+stiffness |> 
+    filter(plate != "Long") |>
+    group_by(plate, id) |>
+    summarise(stiffness = mean(motion), .groups = "keep") |>
+    ungroup() |>
+    summarise(pairwise.t.test(x = stiffness, g = plate, paired = TRUE) |> broom::tidy())
+
+```
+But what is the magnitude of the difference?
+
+```{r}
+differences <- stiffness |> 
+    filter(plate != "Long") |>
+    group_by(plate, id) |>
+    summarise(stiffness = mean(motion), .groups = "keep") |>
+    ungroup() |>
+    tidyr::pivot_wider(names_from = plate, values_from = stiffness) |>
+    mutate(diff = Short - Short_nls)
+
+
+differences
+```
+
+
+On average the difference from removing the lag screws was 
+`r mean(differences$diff)` mm/N.
+
+## Conclusions
+
+Taking the lag screws out made the plates significantly less stiff,
+compared to both the long plates and the short plates with lag screws.
+
